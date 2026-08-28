@@ -3,6 +3,7 @@ import Dashboard from './pages/Dashboard';
 import Details from './pages/Details';
 import Breakdown from './pages/Breakdown';
 import Insights from './pages/Insights';
+import IngestDashboard from './components/IngestDashboard';
 import './App.css';
 
 function Layout() {
@@ -15,6 +16,7 @@ function Layout() {
           <li><NavLink to="/details">Details</NavLink></li>
           <li><NavLink to="/breakdown">Breakdown</NavLink></li>
           <li><NavLink to="/insights">Insights</NavLink></li>
+          <li><NavLink to="/ingest" className="ingest">Ingestion</NavLink></li>
         </ul>
       </nav>
       <main className="content">
@@ -23,6 +25,7 @@ function Layout() {
           <Route path="/details" element={<Details />} />
           <Route path="/breakdown" element={<Breakdown />} />
           <Route path="/insights" element={<Insights />} />
+          <Route path="/ingest" element={<IngestDashboard />} />
         </Routes>
       </main>
     </div>
