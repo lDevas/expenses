@@ -1,0 +1,7 @@
+[ai]
+model = "lm-studio"
+
+[ai.lm-studio]
+api_base = "http://localhost:1234"
+api_type = "openai"
+default_model = "local-model"
