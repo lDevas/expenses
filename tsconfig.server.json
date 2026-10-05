@@ -1,0 +1,39 @@
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.server.tsbuildinfo",
+    "target": "es2023",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "skipLibCheck": true,
+
+    /* Node runtime (type-stripped .ts imports) */
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+
+    /* Linting */
+    "strict": true,
+    "erasableSyntaxOnly": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": [
+    "server/ingestion/types.ts",
+    "server/ingestion/registry.ts",
+    "server/ingestion/consolidation.ts",
+    "server/ingestion/consolidation/pairing.ts",
+    "server/ingestion/parsers/index.ts",
+    "server/ingestion/parsers/itauEstadoXls.ts",
+    "server/ingestion/parsers/itauCardPdf.ts",
+    "server/ingestion/parsers/santanderUmsatz.ts",
+    "server/ingestion/parsers/santanderCardXls.ts",
+    "server/ingestion/parsers/ibkrCsv.ts",
+    "server/ingestion/parsers/etoroXlsx.ts",
+    "server/db/queries.ts",
+    "server/pipeline.ts"
+  ]
+}

@@ -34,7 +34,7 @@ export interface Transaction {
   description: string;
   amount: number;                // Positive = credit/income, negative = debit/expense
   currency: string;
-  category: string;              // AI-assigned or manual
+  category?: string;             // AI-assigned or manual
   subcategory?: string;
   reference?: string;            // Reference number from bank
   metadata?: Record<string, any>; // Raw data from bank for audit trail
@@ -113,6 +113,126 @@ export interface BrowserSession {
   cookies: Record<string, any>;  // Cookie data
   createdAt: string;             // ISO timestamp
   expiresAt?: string;            // ISO timestamp
+}
+
+// ─── Consolidation (statement pipeline) ───
+
+export type ConsolidatedCategory =
+  | 'expense'
+  | 'income'
+  | 'transfer-in'
+  | 'transfer-out'
+  | 'internal-transfer'
+  | 'fx-exchange'
+  | 'investment-income'
+  | 'tax'
+  | 'fee'
+  | 'card-payment'
+  | 'other';
+
+export type MatchStatus = 'matched' | 'unmatched';
+
+export interface ConsolidatedItem {
+  id: string;
+  accountId: string;
+  accountLabel: string;
+  date: string;
+  description: string;
+  amount: number;
+  currency: string;
+  category: ConsolidatedCategory;
+  reference?: string;
+  metadata?: Record<string, any>;
+  sourceFiles: string[];
+}
+
+export interface ConsolidatedTransfer {
+  id: string;
+  kind: 'wire' | 'card' | 'internal';
+  matchStatus: MatchStatus;
+  fromAccountId?: string;
+  fromAccountLabel: string;
+  fromCurrency?: string;
+  fromAmount?: number;
+  fromDate?: string;
+  fromDescription?: string;
+  toAccountId?: string;
+  toAccountLabel: string;
+  toCurrency?: string;
+  toAmount?: number;
+  toDate?: string;
+  toDescription?: string;
+  impliedRate?: number;
+  sourceFiles: string[];
+}
+
+export interface ConsolidatedExchange {
+  id: string;
+  matchStatus: MatchStatus;
+  accountId?: string;
+  accountLabel: string;
+  date?: string;
+  description?: string;
+  fromCurrency?: string;
+  fromAmount?: number;
+  toCurrency?: string;
+  toAmount?: number;
+  impliedRate?: number;
+  sourceFiles: string[];
+}
+
+export interface ConsolidatedPosition {
+  id: string;
+  accountId: string;
+  accountLabel: string;
+  symbol: string;
+  name?: string;
+  qty: number;
+  costBasis?: number;
+  value?: number;
+  unrealizedPl?: number;
+  snapshotDate: string;
+  currency: string;
+  metadata?: Record<string, any>;
+  sourceFiles: string[];
+}
+
+export interface ConsolidatedRealized {
+  id: string;
+  accountId: string;
+  accountLabel: string;
+  symbol: string;
+  name?: string;
+  date: string;
+  qty?: number;
+  proceeds?: number;
+  costBasis?: number;
+  realizedPl: number;
+  currency: string;
+  metadata?: Record<string, any>;
+  sourceFiles: string[];
+}
+
+export interface ConsolidatedIssue {
+  file: string;
+  sheet?: string;
+  row?: number;
+  field?: string;
+  raw?: string;
+  severity: 'info' | 'warning' | 'error';
+  message: string;
+}
+
+export interface ConsolidatedResult {
+  runId: string;
+  generatedAt: string;
+  files: string[];
+  items: ConsolidatedItem[];
+  transfers: ConsolidatedTransfer[];
+  exchanges: ConsolidatedExchange[];
+  positions: ConsolidatedPosition[];
+  realized: ConsolidatedRealized[];
+  issues: ConsolidatedIssue[];
 }
 
 // ─── Utility / ID Generation ───

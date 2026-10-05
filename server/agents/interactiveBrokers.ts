@@ -1,4 +1,4 @@
-import type { AgentConfig } from '../../src/types/models';
+import type { AgentConfig } from '../../src/types/models.ts';
 
 export const interactiveBrokersConfig: AgentConfig = {
   id: 'interactive-brokers',

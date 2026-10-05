@@ -1,6 +1,6 @@
-import pdfParse from 'pdf-parse';
-import type { Transaction } from '../../../src/types/models';
-import { generateId, now } from '../../../src/types/models';
+import { PDFParse } from 'pdf-parse';
+import type { Transaction } from '../../../src/types/models.ts';
+import { generateId, now } from '../../../src/types/models.ts';
 
 interface RawTransaction {
   operacionDate: string;
@@ -22,12 +22,15 @@ interface Account {
 
 export class PdfStatementParser {
   async parse(fileBuffer: Buffer, institutionId: string): Promise<Transaction[]> {
+    const parser = new PDFParse({ data: fileBuffer });
     try {
-      const { text } = await pdfParse(fileBuffer);
+      const { text } = await parser.getText();
       const transactions = this.extractTransactions(text, institutionId);
       return this.normalizeTransactions(transactions, institutionId);
     } catch (error) {
       return [];
+    } finally {
+      parser.destroy();
     }
   }
 

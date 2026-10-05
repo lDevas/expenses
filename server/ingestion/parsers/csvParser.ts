@@ -1,6 +1,6 @@
 import Papa from 'papaparse';
-import type { Transaction } from '../../../src/types/models';
-import { generateId, now } from '../../../src/types/models';
+import type { Transaction } from '../../../src/types/models.ts';
+import { generateId, now } from '../../../src/types/models.ts';
 
 export class CsvStatementParser {
   async parse(fileBuffer: Buffer, institutionId: string, options?: {

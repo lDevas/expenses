@@ -3,15 +3,17 @@ import { serve } from '@hono/node-server';
 import Database from 'better-sqlite3';
 import * as fs from 'fs';
 import * as path from 'path';
-import { DatabaseQueries } from './db/queries';
-import { AgentOrchestrator } from './ingestion/agent';
-import { PdfStatementParser } from './ingestion/parsers/pdfParser';
-import { santanderConfig } from './agents/santander';
-import { itauConfig } from './agents/itau';
-import { prexConfig } from './agents/prex';
-import { etoroConfig } from './agents/etoro';
-import { interactiveBrokersConfig } from './agents/interactiveBrokers';
-import type { Institution, Account, Transaction, IngestionRun } from '../src/types/models';
+import { DatabaseQueries } from './db/queries.ts';
+import { applySchema } from './db/schemaSql.ts';
+import { AgentOrchestrator } from './ingestion/agent.ts';
+import { PdfStatementParser } from './ingestion/parsers/pdfParser.ts';
+import { runConsolidation } from './pipeline.ts';
+import { santanderConfig } from './agents/santander.ts';
+import { itauConfig } from './agents/itau.ts';
+import { prexConfig } from './agents/prex.ts';
+import { etoroConfig } from './agents/etoro.ts';
+import { interactiveBrokersConfig } from './agents/interactiveBrokers.ts';
+import type { Institution, Account, Transaction, IngestionRun } from '../src/types/models.ts';
 
 const SEILLE_DIR = path.join(process.env.HOME || '', '.seville');
 const DB_PATH = path.join(SEILLE_DIR, 'seville.db');
@@ -24,80 +26,9 @@ function initializeDatabase(): DatabaseQueries {
   const db = new Database(DB_PATH);
   db.pragma('journal_mode = WAL');
 
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS institutions (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      type TEXT NOT NULL,
-      country TEXT NOT NULL,
-      currency TEXT NOT NULL,
-      last_sync TEXT,
-      status TEXT NOT NULL DEFAULT 'needs-setup'
-    );
+  db.pragma('foreign_keys = ON');
 
-    CREATE TABLE IF NOT EXISTS accounts (
-      id TEXT PRIMARY KEY,
-      institution_id TEXT NOT NULL,
-      name TEXT NOT NULL,
-      type TEXT NOT NULL,
-      currency TEXT NOT NULL,
-      balance REAL NOT NULL DEFAULT 0,
-      balance_date TEXT NOT NULL,
-      account_number TEXT,
-      FOREIGN KEY (institution_id) REFERENCES institutions(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS transactions (
-      id TEXT PRIMARY KEY,
-      account_id TEXT NOT NULL,
-      date TEXT NOT NULL,
-      post_date TEXT,
-      description TEXT NOT NULL,
-      amount REAL NOT NULL,
-      currency TEXT NOT NULL,
-      category TEXT,
-      subcategory TEXT,
-      reference TEXT,
-      metadata TEXT,
-      source TEXT NOT NULL,
-      imported_at TEXT NOT NULL,
-      FOREIGN KEY (account_id) REFERENCES accounts(id)
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_transactions_account_id ON transactions(account_id);
-    CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
-    CREATE INDEX IF NOT EXISTS idx_transactions_account_date ON transactions(account_id, date);
-
-    CREATE TABLE IF NOT EXISTS ingestion_runs (
-      id TEXT PRIMARY KEY,
-      institution_id TEXT NOT NULL,
-      started_at TEXT NOT NULL,
-      completed_at TEXT,
-      status TEXT NOT NULL,
-      transactions_ingested INTEGER NOT NULL DEFAULT 0,
-      error TEXT,
-      FOREIGN KEY (institution_id) REFERENCES institutions(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS ingestion_steps (
-      id TEXT PRIMARY KEY,
-      ingestion_run_id TEXT NOT NULL,
-      "order" INTEGER NOT NULL,
-      action TEXT NOT NULL,
-      result TEXT NOT NULL,
-      message TEXT,
-      screenshot_path TEXT,
-      llm_decision TEXT,
-      FOREIGN KEY (ingestion_run_id) REFERENCES ingestion_runs(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS browser_sessions (
-      institution_id TEXT PRIMARY KEY,
-      cookies TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      expires_at TEXT
-    );
-  `);
+  applySchema(db);
 
   const queries = new DatabaseQueries(db);
   queries.seedDefaultInstitutions();
@@ -276,6 +207,47 @@ app.post('/api/transactions/upload', async (c) => {
     transactionsIngested: transactions.length,
     transactions,
   }, 201);
+});
+
+// ─── Statement Consolidation Endpoints ───
+
+// POST /api/statements/upload — batch upload (one or more statement files).
+// Runs the full pipeline: parse each file → consolidate → persist one run.
+app.post('/api/statements/upload', async (c) => {
+  const formData = await c.req.formData();
+  const entries = formData.getAll('file');
+  const files = entries.filter((e): e is File => e instanceof File);
+
+  if (files.length === 0) {
+    return c.json({ error: 'No files provided (append one or more "file" fields)' }, 400);
+  }
+
+  const buffers = await Promise.all(
+    files.map(async (f) => ({ name: f.name, buffer: Buffer.from(await f.arrayBuffer()) })),
+  );
+
+  const { result } = await runConsolidation(buffers, db);
+  return c.json({
+    runId: result.runId,
+    itemCount: result.items.length,
+    transferCount: result.transfers.length,
+    exchangeCount: result.exchanges.length,
+    positionCount: result.positions.length,
+    realizedCount: result.realized.length,
+    issueCount: result.issues.length,
+    files: result.files,
+  }, 201);
+});
+
+// GET /api/statements/consolidated — the stored result of a consolidation run
+// (latest by default; pass ?run= to select one).
+app.get('/api/statements/consolidated', (c) => {
+  const runId = c.req.query('run') || undefined;
+  const result = db.getConsolidated(runId);
+  if (!result) {
+    return c.json({ error: 'No consolidation run found — upload statement files first' }, 404);
+  }
+  return c.json(result);
 });
 
 // ─── Session Management Endpoints ───

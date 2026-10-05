@@ -1,22 +1,33 @@
-import Database, { type Database as DatabaseType } from 'better-sqlite3';
-import { generateId, now } from '../../src/types/models';
+import { type Database as DatabaseType } from 'better-sqlite3';
+import { generateId, now } from '../../src/types/models.ts';
 import type {
   Institution, Account, Transaction,
   IngestionRun, IngestionStep, BrowserSession,
   InstitutionStatus, IngestionStatus,
   StepResult, TransactionSource,
-} from '../../src/types/models';
+} from '../../src/types/models.ts';
+import type {
+  ConsolidatedResult, ConsolidatedItem, ConsolidatedTransfer, ConsolidatedExchange,
+  ParsedStatement, IssueSeverity,
+} from '../ingestion/types.ts';
 
 function serializeDate(date: Date | null | undefined): string | null {
   if (date === null || date === undefined) return null;
   return date.toISOString();
 }
 
-function deserializeDate(value: string | number | Date | null | undefined): Date | null {
+function deserializeDate(value: unknown): Date | null {
   if (value === null || value === undefined) return null;
   if (value instanceof Date) return value;
   if (typeof value === 'number') return new Date(value);
   return new Date(String(value));
+}
+
+/** A NOT NULL date column: a missing/invalid value means a corrupt row, not a legit null. */
+function requireDate(value: unknown): Date {
+  const d = deserializeDate(value);
+  if (!d || isNaN(d.getTime())) throw new Error(`Invalid date value: ${JSON.stringify(value)}`);
+  return d;
 }
 
 function serializeMetadata(value: Record<string, any> | null | undefined): string | null {
@@ -37,17 +48,17 @@ function mapRowToTransaction(row: Record<string, unknown>): Transaction {
   return {
     id: row.id as string,
     accountId: row.account_id as string,
-    date: deserializeDate(row.date),
-    postDate: deserializeDate(row.post_date),
+    date: requireDate(row.date),
+    postDate: deserializeDate(row.post_date) ?? undefined,
     description: row.description as string,
     amount: row.amount as number,
     currency: row.currency as string,
     category: (row.category as string) || undefined,
     subcategory: (row.subcategory as string) || undefined,
     reference: (row.reference as string) || undefined,
-    metadata: deserializeMetadata(row.metadata as string | undefined),
+    metadata: deserializeMetadata(row.metadata as string | undefined) ?? undefined,
     source: row.source as TransactionSource,
-    importedAt: deserializeDate(row.imported_at),
+    importedAt: requireDate(row.imported_at),
   };
 }
 
@@ -59,7 +70,7 @@ function mapRowToAccount(row: Record<string, unknown>): Account {
     type: row.type as 'checking' | 'savings' | 'investment' | 'credit' | 'loan',
     currency: row.currency as string,
     balance: row.balance as number,
-    balanceDate: deserializeDate(row.balance_date),
+    balanceDate: requireDate(row.balance_date),
     accountNumber: (row.account_number as string) || undefined,
   };
 }
@@ -80,8 +91,8 @@ function mapRowToIngestionRun(row: Record<string, unknown>): IngestionRun {
   return {
     id: row.id as string,
     institutionId: row.institution_id as string,
-    startedAt: deserializeDate(row.started_at),
-    completedAt: deserializeDate(row.completed_at),
+    startedAt: requireDate(row.started_at),
+    completedAt: deserializeDate(row.completed_at) ?? undefined,
     status: row.status as IngestionStatus,
     transactionsIngested: (row.transactions_ingested as number) || 0,
     error: (row.error as string) || undefined,
@@ -487,5 +498,283 @@ export class DatabaseQueries {
 
   getDatabasePath(): string {
     return this.db.name;
+  }
+
+  // ─── Consolidation (file-upload pipeline) ───
+
+  saveConsolidation(result: ConsolidatedResult, statements: ParsedStatement[]): void {
+    const db = this.db;
+    const tx = db.transaction(() => {
+      // upsert institutions + accounts discovered in the statements
+      for (const s of statements) {
+        const a = s.account;
+        if (a.id === 'unknown') continue;
+        const institutionType = a.type === 'investment' ? 'brokerage' : a.type === 'credit' ? 'credit' : 'bank';
+        const country = /itau|santander/.test(a.institutionId) ? 'UY' : 'US';
+        db.prepare(
+          `INSERT OR IGNORE INTO institutions (id, name, type, country, currency)
+           VALUES (?, ?, ?, ?, ?)`
+        ).run(a.institutionId, a.institutionName, institutionType, country, a.currency);
+        const balanceDate = a.closingBalance !== undefined && a.balanceDate ? a.balanceDate : a.periodTo ?? new Date();
+        db.prepare(
+          `INSERT INTO accounts (id, institution_id, name, type, currency, balance, balance_date, account_number)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             name = excluded.name,
+             type = excluded.type,
+             currency = excluded.currency,
+             balance = excluded.balance,
+             balance_date = excluded.balance_date,
+             account_number = COALESCE(excluded.account_number, accounts.account_number)`
+        ).run(
+          a.id,
+          a.institutionId,
+          a.name,
+          a.type,
+          a.currency,
+          a.closingBalance ?? 0,
+          serializeDate(balanceDate) || new Date().toISOString(),
+          a.number || null,
+        );
+      }
+
+      db.prepare(
+        `INSERT INTO consolidation_runs
+         (id, generated_at, files, item_count, transfer_count, exchange_count, position_count, realized_count, issue_count)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        result.runId,
+        serializeDate(result.generatedAt) || new Date().toISOString(),
+        JSON.stringify(result.files),
+        result.items.length,
+        result.transfers.length,
+        result.exchanges.length,
+        result.positions.length,
+        result.realized.length,
+        result.issues.length,
+      );
+
+      const insItem = db.prepare(
+        `INSERT INTO transactions
+         (id, account_id, run_id, date, post_date, description, amount, currency, category, reference, metadata, source, imported_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'file-upload', ?)`
+      );
+      for (const it of result.items) {
+        insItem.run(
+          it.id,
+          it.accountId,
+          result.runId,
+          serializeDate(it.date) || new Date().toISOString(),
+          null,
+          it.description,
+          it.amount,
+          it.currency,
+          it.category,
+          it.reference || null,
+          it.metadata ? JSON.stringify(it.metadata) : null,
+          serializeDate(result.generatedAt) || new Date().toISOString(),
+        );
+      }
+
+      const insTransfer = db.prepare(
+        `INSERT INTO consolidation_transfers
+         (id, run_id, kind, match_status, from_account_id, from_label, from_currency, from_amount, from_date, from_description,
+          to_account_id, to_label, to_currency, to_amount, to_date, to_description, implied_rate, source_files)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+      for (const t of result.transfers) {
+        insTransfer.run(
+          t.id, result.runId, t.kind, t.matchStatus,
+          t.fromAccountId ?? null, t.fromAccountLabel, t.fromCurrency ?? null, t.fromAmount ?? null,
+          serializeDate(t.fromDate), t.fromDescription ?? null,
+          t.toAccountId ?? null, t.toAccountLabel, t.toCurrency ?? null, t.toAmount ?? null,
+          serializeDate(t.toDate), t.toDescription ?? null,
+          t.impliedRate ?? null, JSON.stringify(t.sourceFiles),
+        );
+      }
+
+      const insExchange = db.prepare(
+        `INSERT INTO consolidation_exchanges
+         (id, run_id, match_status, account_id, account_label, date, description, from_currency, from_amount, to_currency, to_amount, implied_rate, source_files)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+      for (const e of result.exchanges) {
+        insExchange.run(
+          e.id, result.runId, e.matchStatus,
+          e.accountId ?? null, e.accountLabel, serializeDate(e.date), e.description ?? null,
+          e.fromCurrency ?? null, e.fromAmount ?? null, e.toCurrency ?? null, e.toAmount ?? null,
+          e.impliedRate ?? null, JSON.stringify(e.sourceFiles),
+        );
+      }
+
+      const insPosition = db.prepare(
+        `INSERT INTO consolidation_positions
+         (id, run_id, account_id, account_label, symbol, name, qty, cost_basis, value, unrealized_pl, snapshot_date, currency, metadata, source_files)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+      for (const p of result.positions) {
+        insPosition.run(
+          p.id, result.runId, p.accountId, p.accountLabel, p.symbol, p.name ?? null,
+          p.qty, p.costBasis ?? null, p.value ?? null, p.unrealizedPl ?? null,
+          serializeDate(p.snapshotDate), p.currency,
+          p.metadata ? JSON.stringify(p.metadata) : null, JSON.stringify(p.sourceFiles),
+        );
+      }
+
+      const insRealized = db.prepare(
+        `INSERT INTO consolidation_realized
+         (id, run_id, account_id, account_label, symbol, name, date, qty, proceeds, cost_basis, realized_pl, currency, metadata, source_files)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+      for (const r of result.realized) {
+        insRealized.run(
+          r.id, result.runId, r.accountId, r.accountLabel, r.symbol, r.name ?? null,
+          serializeDate(r.date), r.qty ?? null, r.proceeds ?? null, r.costBasis ?? null,
+          r.realizedPl, r.currency,
+          r.metadata ? JSON.stringify(r.metadata) : null, JSON.stringify(r.sourceFiles),
+        );
+      }
+
+      const insIssue = db.prepare(
+        `INSERT INTO consolidation_issues (id, run_id, file, sheet, row, field, raw, severity, message)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+      for (const i of result.issues) {
+        insIssue.run(
+          generateId(), result.runId, i.file, i.sheet ?? null, i.row ?? null,
+          i.field ?? null, i.raw ?? null, i.severity, i.message,
+        );
+      }
+    });
+    tx();
+  }
+
+  getLatestConsolidationRunId(): string | null {
+    const row = this.db.prepare(
+      'SELECT id FROM consolidation_runs ORDER BY generated_at DESC LIMIT 1'
+    ).get() as { id: string } | undefined;
+    return row?.id ?? null;
+  }
+
+  getConsolidated(runId?: string): ConsolidatedResult | null {
+    const id = runId ?? this.getLatestConsolidationRunId();
+    if (!id) return null;
+    const run = this.db.prepare(
+      'SELECT * FROM consolidation_runs WHERE id = ?'
+    ).get(id) as Record<string, unknown> | undefined;
+    if (!run) return null;
+
+    const items = this.db.prepare(
+      `SELECT t.*, a.name AS account_label
+       FROM transactions t LEFT JOIN accounts a ON a.id = t.account_id
+       WHERE t.run_id = ? ORDER BY t.date`
+    ).all(id) as Record<string, unknown>[];
+
+    const transfers = this.db.prepare(
+      'SELECT * FROM consolidation_transfers WHERE run_id = ?'
+    ).all(id) as Record<string, unknown>[];
+    const exchanges = this.db.prepare(
+      'SELECT * FROM consolidation_exchanges WHERE run_id = ?'
+    ).all(id) as Record<string, unknown>[];
+    const positions = this.db.prepare(
+      'SELECT * FROM consolidation_positions WHERE run_id = ?'
+    ).all(id) as Record<string, unknown>[];
+    const realized = this.db.prepare(
+      'SELECT * FROM consolidation_realized WHERE run_id = ?'
+    ).all(id) as Record<string, unknown>[];
+    const issues = this.db.prepare(
+      'SELECT * FROM consolidation_issues WHERE run_id = ?'
+    ).all(id) as Record<string, unknown>[];
+
+    return {
+      runId: id,
+      generatedAt: deserializeDate(run.generated_at) ?? new Date(),
+      files: JSON.parse((run.files as string) || '[]'),
+      items: items.map((r) => ({
+        id: r.id as string,
+        accountId: r.account_id as string,
+        accountLabel: ((r.account_label as string) || (r.account_id as string)),
+        date: deserializeDate(r.date) ?? new Date(),
+        description: r.description as string,
+        amount: r.amount as number,
+        currency: r.currency as string,
+        category: ((r.category as string) || 'other') as ConsolidatedItem['category'],
+        reference: (r.reference as string) || undefined,
+        metadata: deserializeMetadata(r.metadata as string | null) ?? undefined,
+        sourceFiles: [],
+      })),
+      transfers: transfers.map((r) => ({
+        id: r.id as string,
+        kind: r.kind as ConsolidatedTransfer['kind'],
+        matchStatus: r.match_status as ConsolidatedTransfer['matchStatus'],
+        fromAccountId: (r.from_account_id as string) || undefined,
+        fromAccountLabel: (r.from_label as string) || '',
+        fromCurrency: (r.from_currency as string) || undefined,
+        fromAmount: (r.from_amount as number) || undefined,
+        fromDate: deserializeDate(r.from_date) ?? undefined,
+        fromDescription: (r.from_description as string) || undefined,
+        toAccountId: (r.to_account_id as string) || undefined,
+        toAccountLabel: (r.to_label as string) || '',
+        toCurrency: (r.to_currency as string) || undefined,
+        toAmount: (r.to_amount as number) || undefined,
+        toDate: deserializeDate(r.to_date) ?? undefined,
+        toDescription: (r.to_description as string) || undefined,
+        impliedRate: (r.implied_rate as number) || undefined,
+        sourceFiles: JSON.parse((r.source_files as string) || '[]'),
+      })),
+      exchanges: exchanges.map((r) => ({
+        id: r.id as string,
+        matchStatus: r.match_status as ConsolidatedExchange['matchStatus'],
+        accountId: (r.account_id as string) || undefined,
+        accountLabel: (r.account_label as string) || '',
+        date: deserializeDate(r.date) ?? undefined,
+        description: (r.description as string) || undefined,
+        fromCurrency: (r.from_currency as string) || undefined,
+        fromAmount: (r.from_amount as number) || undefined,
+        toCurrency: (r.to_currency as string) || undefined,
+        toAmount: (r.to_amount as number) || undefined,
+        impliedRate: (r.implied_rate as number) || undefined,
+        sourceFiles: JSON.parse((r.source_files as string) || '[]'),
+      })),
+      positions: positions.map((r) => ({
+        id: r.id as string,
+        accountId: (r.account_id as string) || '',
+        accountLabel: (r.account_label as string) || '',
+        symbol: (r.symbol as string) || '',
+        name: (r.name as string) || undefined,
+        qty: (r.qty as number) ?? 0,
+        costBasis: (r.cost_basis as number) ?? undefined,
+        value: (r.value as number) ?? undefined,
+        unrealizedPl: (r.unrealized_pl as number) ?? undefined,
+        snapshotDate: deserializeDate(r.snapshot_date) ?? new Date(),
+        currency: (r.currency as string) || 'USD',
+        metadata: deserializeMetadata(r.metadata as string | null) ?? undefined,
+        sourceFiles: JSON.parse((r.source_files as string) || '[]'),
+      })),
+      realized: realized.map((r) => ({
+        id: r.id as string,
+        accountId: (r.account_id as string) || '',
+        accountLabel: (r.account_label as string) || '',
+        symbol: (r.symbol as string) || '',
+        name: (r.name as string) || undefined,
+        date: deserializeDate(r.date) ?? new Date(),
+        qty: (r.qty as number) ?? undefined,
+        proceeds: (r.proceeds as number) ?? undefined,
+        costBasis: (r.cost_basis as number) ?? undefined,
+        realizedPl: (r.realized_pl as number) ?? 0,
+        currency: (r.currency as string) || 'USD',
+        metadata: deserializeMetadata(r.metadata as string | null) ?? undefined,
+        sourceFiles: JSON.parse((r.source_files as string) || '[]'),
+      })),
+      issues: issues.map((r) => ({
+        file: (r.file as string) || '',
+        sheet: (r.sheet as string) || undefined,
+        row: (r.row as number) ?? undefined,
+        field: (r.field as string) || undefined,
+        raw: (r.raw as string) || undefined,
+        severity: r.severity as IssueSeverity,
+        message: r.message as string,
+      })),
+    };
   }
 }

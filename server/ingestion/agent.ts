@@ -7,9 +7,9 @@ import type {
   Institution,
   Account,
   Transaction,
-} from '../../src/types/models';
-import { DatabaseQueries } from '../db/queries';
-import { generateId, now } from '../../src/types/models';
+} from '../../src/types/models.ts';
+import { DatabaseQueries } from '../db/queries.ts';
+import { generateId, now } from '../../src/types/models.ts';
 import * as fs from 'fs';
 import * as path from 'path';
 

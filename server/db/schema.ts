@@ -6,7 +6,7 @@ import type {
   Institution, Account, Transaction,
   InstitutionType, InstitutionStatus,
   AccountType, TransactionSource,
-} from '../../src/types/models';
+} from '../../src/types/models.ts';
 
 const DEFAULT_DB_PATH = path.join(os.homedir(), '.seville', 'data', 'seville.db');
 

@@ -1,4 +1,4 @@
-import type { AgentConfig } from '../../src/types/models';
+import type { AgentConfig } from '../../src/types/models.ts';
 
 export const prexConfig: AgentConfig = {
   id: 'prex-uy',
