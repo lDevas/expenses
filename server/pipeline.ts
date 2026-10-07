@@ -10,6 +10,7 @@ import type { ConsolidatedResult, ParsedStatement } from './ingestion/types.ts';
 export interface StatementFile {
   name: string;
   buffer: Buffer;
+  hash?: string;
 }
 
 export interface ConsolidationOutput {
@@ -26,11 +27,25 @@ export interface ConsolidationOutput {
 export async function runConsolidation(files: StatementFile[], db: DatabaseQueries): Promise<ConsolidationOutput> {
   const statements: ParsedStatement[] = [];
   for (const f of files) {
-    statements.push(await parseStatement(f.name, f.buffer));
+    const hash = computeFileHash(f.buffer);
+    const stmt = await parseStatement(f.name, f.buffer);
+    stmt.fileHash = hash;
+    statements.push(stmt);
   }
   const result = consolidate(statements);
   db.saveConsolidation(result, statements);
   return { result, statements };
+}
+
+function computeFileHash(buf: Buffer): string {
+  // Simple deterministic hash of buffer content
+  let hash = 0;
+  for (let i = 0; i < buf.length; i++) {
+    const chr = buf[i];
+    hash = ((hash << 5) - hash) + chr;
+    hash |= 0;
+  }
+  return Math.abs(hash).toString(16);
 }
 
 /** Convenience: read files from disk paths. */

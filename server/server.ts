@@ -15,13 +15,13 @@ import { etoroConfig } from './agents/etoro.ts';
 import { interactiveBrokersConfig } from './agents/interactiveBrokers.ts';
 import type { Institution, Account, Transaction, IngestionRun } from '../src/types/models.ts';
 
-const SEILLE_DIR = path.join(process.env.HOME || '', '.seville');
-const DB_PATH = path.join(SEILLE_DIR, 'seville.db');
+const DATA_DIR = path.join(path.resolve('.'), 'data');
+const DB_PATH = path.join(DATA_DIR, 'expenses.db');
 
 // ─── Database initialization ───
 
 function initializeDatabase(): DatabaseQueries {
-  fs.mkdirSync(SEILLE_DIR, { recursive: true });
+  fs.mkdirSync(DATA_DIR, { recursive: true });
 
   const db = new Database(DB_PATH);
   db.pragma('journal_mode = WAL');
@@ -82,7 +82,7 @@ const agent = new AgentOrchestrator(db);
 // ─── CORS middleware ───
 
 app.use('*', async (c, next) => {
-  c.header('Access-Control-Allow-Origin', process.env.CORS_ORIGIN || 'http://localhost:5173');
+  c.header('Access-Control-Allow-Origin', process.env.CORS_ORIGIN || '*');
   c.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   c.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (c.req.method === 'OPTIONS') {
@@ -166,6 +166,12 @@ app.get('/api/transactions', (c) => {
     query.to ? new Date(query.to) : undefined,
   );
   return c.json(transactions);
+});
+
+// GET /api/fx/latest — latest FX exchange done on any account (null if none).
+// The Dashboard uses its implied rate to normalize UYU/USD.
+app.get('/api/fx/latest', (c) => {
+  return c.json(db.getLatestExchange());
 });
 
 // ─── File Upload Endpoints ───

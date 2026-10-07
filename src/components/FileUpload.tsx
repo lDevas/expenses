@@ -1,6 +1,5 @@
 import { useState, useRef } from 'react';
-
-const API_URL = 'http://localhost:3456/api';
+import { apiFetch } from '../lib/api';
 
 interface Props {
   institutionId: string;
@@ -28,16 +27,15 @@ export default function FileUpload({ institutionId, onUploadComplete }: Props) {
       formData.append('parserType', parserType);
       
       try {
-        const res = await fetch(`${API_URL}/transactions/upload`, {
+        const data = await apiFetch<{ transactionsIngested: number }>(`/transactions/upload`, {
           method: 'POST',
           body: formData,
         });
-        const data = await res.json();
-        
+
         setResult({ count: data.transactionsIngested });
         if (onUploadComplete) onUploadComplete(data.transactionsIngested);
-      } catch {
-        setResult({ count: 0, error: `Failed to process ${file.name}` });
+      } catch (e) {
+        setResult({ count: 0, error: e instanceof Error ? e.message : `Failed to process ${file.name}` });
       }
     }
     

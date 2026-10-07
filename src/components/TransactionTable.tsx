@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import type { Transaction } from '../types/models';
-
-const API_URL = 'http://localhost:3456/api';
+import { apiFetch } from '../lib/api';
 
 interface Props {
   accountId?: string;
@@ -12,24 +11,26 @@ interface Props {
 export default function TransactionTable({ accountId, initialFrom, initialTo }: Props) {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [from, setFrom] = useState(initialFrom || '');
   const [to, setTo] = useState(initialTo || '');
   const [filterSource, setFilterSource] = useState<string>('');
 
   const loadTransactions = async () => {
     setLoading(true);
+    setError(null);
     try {
       const params = new URLSearchParams();
       if (accountId) params.set('account', accountId);
       if (from) params.set('from', from);
       if (to) params.set('to', to);
       if (filterSource) params.set('source', filterSource);
-      
-      const res = await fetch(`${API_URL}/transactions?${params}`);
-      const data = await res.json();
+
+      const data = await apiFetch<Transaction[]>(`/transactions?${params}`);
       setTransactions(data);
-    } catch {
+    } catch (e) {
       setTransactions([]);
+      setError(e instanceof Error ? e.message : 'Failed to load transactions');
     }
     setLoading(false);
   };
@@ -72,6 +73,8 @@ export default function TransactionTable({ accountId, initialFrom, initialTo }: 
       
       {loading ? (
         <p>Loading transactions...</p>
+      ) : error ? (
+        <p className="error">{error}</p>
       ) : transactions.length === 0 ? (
         <p className="empty">No transactions found.</p>
       ) : (

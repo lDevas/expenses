@@ -104,6 +104,7 @@ export interface ParsedRealized {
 export interface ParsedStatement {
   kind: StatementKind;
   file: string;
+  fileHash?: string;
   account: ParsedAccount;
   transactions: RawTxn[];
   positions: ParsedPosition[];

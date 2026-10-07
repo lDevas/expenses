@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
 import InstitutionCard from './InstitutionCard';
 import type { Institution } from '../types/models';
-
-const API_URL = 'http://localhost:3456/api';
+import { apiFetch } from '../lib/api';
 
 export default function IngestDashboard() {
   const [institutions, setInstitutions] = useState<Institution[]>([]);
@@ -10,14 +9,13 @@ export default function IngestDashboard() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch(`${API_URL}/ingest/status`)
-      .then(r => r.json())
+    apiFetch<Institution[]>('/ingest/status')
       .then(data => {
         setInstitutions(data);
         setLoading(false);
       })
-      .catch(() => {
-        setError('Could not connect to local server. Make sure the server is running.');
+      .catch((e) => {
+        setError(e instanceof Error ? e.message : 'Failed to load institutions');
         setLoading(false);
       });
   }, []);

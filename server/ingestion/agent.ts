@@ -13,9 +13,9 @@ import { generateId, now } from '../../src/types/models.ts';
 import * as fs from 'fs';
 import * as path from 'path';
 
-const SEVILLE_DIR = path.join(process.env.HOME || '', '.seville');
-const COOKIES_DIR = path.join(SEVILLE_DIR, 'cookies');
-const SCREENSHOTS_DIR = path.join(SEVILLE_DIR, 'screenshots');
+const DATA_DIR = path.join(path.resolve('.'), 'data');
+const COOKIES_DIR = path.join(DATA_DIR, 'cookies');
+const SCREENSHOTS_DIR = path.join(DATA_DIR, 'screenshots');
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama-3.2';
 const MAX_ITERATIONS = 50;

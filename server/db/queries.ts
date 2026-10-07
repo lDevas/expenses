@@ -259,23 +259,20 @@ export class DatabaseQueries {
   saveTransaction(txn: Transaction): void {
     const db = this.db;
 
-    const dedupKey = this.db.prepare(
-      'SELECT id FROM transactions WHERE account_id = ? AND date = ? AND description = ? AND amount = ?'
-    ).get(
-      txn.accountId,
-      serializeDate(txn.date),
-      txn.description,
-      txn.amount
-    ) as { id: string } | undefined;
+    const contentHash = this.computeTxnHash(txn);
 
-    if (dedupKey) {
+    const existing = this.db.prepare(
+      'SELECT id FROM transactions WHERE content_hash = ?'
+    ).get(contentHash) as { id: string } | undefined;
+
+    if (existing) {
       return;
     }
 
     db.prepare(
       `INSERT INTO transactions
-       (id, account_id, date, post_date, description, amount, currency, category, subcategory, reference, metadata, source, imported_at)
-       VALUES (@id, @accountId, @date, @postDate, @description, @amount, @currency, @category, @subcategory, @reference, @metadata, @source, @importedAt)`
+       (id, account_id, date, post_date, description, amount, currency, category, subcategory, reference, metadata, source, imported_at, content_hash)
+       VALUES (@id, @accountId, @date, @postDate, @description, @amount, @currency, @category, @subcategory, @reference, @metadata, @source, @importedAt, @contentHash)`
     ).run({
       id: txn.id,
       accountId: txn.accountId,
@@ -290,7 +287,56 @@ export class DatabaseQueries {
       metadata: serializeMetadata(txn.metadata),
       source: txn.source,
       importedAt: serializeDate(txn.importedAt),
+      contentHash,
     });
+  }
+
+  private computeFileHash(files: string[]): string {
+    const data = files.slice().sort().join('|');
+    let hash = 0;
+    for (let i = 0; i < data.length; i++) {
+      const chr = data.charCodeAt(i);
+      hash = ((hash << 5) - hash) + chr;
+      hash |= 0;
+    }
+    return Math.abs(hash).toString(16);
+  }
+
+  private computeItemHash(item: { accountId: string; date: Date; description: string; amount: number; currency: string; reference?: string }): string {
+    const data = [
+      item.accountId,
+      item.date.toISOString(),
+      item.description,
+      item.amount.toFixed(2),
+      item.currency,
+      item.reference || '',
+    ].join('|');
+    let hash = 0;
+    for (let i = 0; i < data.length; i++) {
+      const chr = data.charCodeAt(i);
+      hash = ((hash << 5) - hash) + chr;
+      hash |= 0;
+    }
+    return Math.abs(hash).toString(16);
+  }
+
+  private computeTxnHash(txn: Transaction): string {
+    const data = [
+      txn.accountId,
+      txn.date.toISOString(),
+      txn.description,
+      txn.amount.toFixed(2),
+      txn.currency,
+      txn.reference || '',
+    ].join('|');
+    // Simple deterministic hash
+    let hash = 0;
+    for (let i = 0; i < data.length; i++) {
+      const chr = data.charCodeAt(i);
+      hash = ((hash << 5) - hash) + chr;
+      hash |= 0;
+    }
+    return Math.abs(hash).toString(16);
   }
 
   deleteTransaction(id: string): void {
@@ -538,14 +584,24 @@ export class DatabaseQueries {
         );
       }
 
+      const fileHash = this.computeFileHash(result.files);
+      const existingRun = this.db.prepare(
+        'SELECT id FROM consolidation_runs WHERE file_hash = ?'
+      ).get(fileHash) as { id: string } | undefined;
+
+      if (existingRun) {
+        return;
+      }
+
       db.prepare(
         `INSERT INTO consolidation_runs
-         (id, generated_at, files, item_count, transfer_count, exchange_count, position_count, realized_count, issue_count)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, generated_at, files, file_hash, item_count, transfer_count, exchange_count, position_count, realized_count, issue_count)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
         result.runId,
         serializeDate(result.generatedAt) || new Date().toISOString(),
         JSON.stringify(result.files),
+        fileHash,
         result.items.length,
         result.transfers.length,
         result.exchanges.length,
@@ -556,10 +612,14 @@ export class DatabaseQueries {
 
       const insItem = db.prepare(
         `INSERT INTO transactions
-         (id, account_id, run_id, date, post_date, description, amount, currency, category, reference, metadata, source, imported_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'file-upload', ?)`
+         (id, account_id, run_id, date, post_date, description, amount, currency, category, reference, metadata, source, imported_at, content_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'file-upload', ?, ?)`
       );
       for (const it of result.items) {
+        const contentHash = this.computeItemHash(it);
+        const existing = db.prepare('SELECT id FROM transactions WHERE content_hash = ?').get(contentHash);
+        if (existing) continue;
+
         insItem.run(
           it.id,
           it.accountId,
@@ -573,6 +633,7 @@ export class DatabaseQueries {
           it.reference || null,
           it.metadata ? JSON.stringify(it.metadata) : null,
           serializeDate(result.generatedAt) || new Date().toISOString(),
+          contentHash,
         );
       }
 
@@ -647,6 +708,31 @@ export class DatabaseQueries {
       }
     });
     tx();
+  }
+
+  /** Latest FX exchange across all accounts (used to normalize UYU/USD on the Dashboard). */
+  getLatestExchange(): ConsolidatedExchange | null {
+    const row = this.db.prepare(
+      `SELECT * FROM consolidation_exchanges
+       WHERE implied_rate IS NOT NULL AND implied_rate > 0
+       ORDER BY date DESC, rowid DESC
+       LIMIT 1`
+    ).get() as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return {
+      id: row.id as string,
+      matchStatus: row.match_status as ConsolidatedExchange['matchStatus'],
+      accountId: (row.account_id as string) || undefined,
+      accountLabel: (row.account_label as string) || '',
+      date: (row.date as string) || undefined,
+      description: (row.description as string) || undefined,
+      fromCurrency: (row.from_currency as string) || undefined,
+      fromAmount: (row.from_amount as number) || undefined,
+      toCurrency: (row.to_currency as string) || undefined,
+      toAmount: (row.to_amount as number) || undefined,
+      impliedRate: (row.implied_rate as number) || undefined,
+      sourceFiles: JSON.parse((row.source_files as string) || '[]'),
+    };
   }
 
   getLatestConsolidationRunId(): string | null {

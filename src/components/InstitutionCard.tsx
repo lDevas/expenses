@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import type { Institution, IngestionRun } from '../types/models';
-
-const API_URL = 'http://localhost:3456/api';
+import { apiFetch } from '../lib/api';
 
 interface Props {
   institution: Institution & { lastRun?: IngestionRun | null };
@@ -15,11 +14,18 @@ export default function InstitutionCard({ institution }: Props) {
     setIngesting(true);
     setResult(null);
     try {
-      const res = await fetch(`${API_URL}/ingest/${institution.id}`, { method: 'POST' });
-      const run = await res.json();
+      const run = await apiFetch<IngestionRun>(`/ingest/${institution.id}`, { method: 'POST' });
       setResult(run);
-    } catch {
-      setResult({ ...institution, error: 'Failed to connect to server' } as any);
+    } catch (e) {
+      setResult({
+        id: 'error',
+        institutionId: institution.id,
+        startedAt: new Date(),
+        status: 'error',
+        transactionsIngested: 0,
+        error: e instanceof Error ? e.message : 'Failed to connect to server',
+        steps: [],
+      });
     }
     setIngesting(false);
   };

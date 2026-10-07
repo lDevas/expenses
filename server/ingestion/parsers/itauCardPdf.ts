@@ -13,10 +13,14 @@ import {
  *   purchase : `DD MM YY 3002 MERCHANT [pesos] [dollars]`
  *   payment  : `DD MM YY PAGOS [-pesos] [-dollars]`
  *
- * Dual-currency resolution:
- *   - two amounts, equal      → USD purchase (amount = dollars)
- *   - two amounts, different  → UYU purchase (amount = pesos; dollars is the converted value)
- *   - one amount              → UYU (pesos)
+ * Currency resolution per row (the statement carries up to two amount columns):
+ *   - one amount              → UYU purchase (pesos column)
+ *   - two amounts, equal      → USD purchase (merchant billed in USD; both columns hold USD)
+ *   - two amounts, different  → foreign-currency purchase (e.g. ARS). The first column is the
+ *                               original foreign amount; the second column is the USD the bank
+ *                               bills. Per the owner we ignore the foreign currency and report
+ *                               the account's currency (USD) — i.e. the second amount.
+ * In every two-amount case the right-most column is the USD the card bills, so we use it.
  * `PAGOS` lines are payments into the card (negative on the statement); one raw txn per currency.
  * `REDUC. IVA LEY 17934` lines are tax credits, netted against their purchase by consolidation.
  */
@@ -134,15 +138,20 @@ export async function parseItauCardPdf(buffer: Buffer, filename: string): Promis
     } else {
       let amount: number;
       let currency: string;
-      if (a2 !== null && a2 !== 0 && a1 !== null && Math.abs(a1 - a2) < 0.005) {
+      const meta: Record<string, unknown> = { rawLine: line };
+      if (a2 !== null && a2 !== 0) {
+        // Two amount columns: the right-most is the USD the card bills. The left column is the
+        // original currency — equal ⇒ merchant billed in USD; different ⇒ a foreign currency
+        // (e.g. ARS). In both cases report the USD amount and ignore the foreign currency.
         amount = a2;
         currency = 'USD';
-      } else if (a2 !== null && a2 !== 0) {
-        amount = a1;
-        currency = 'UYU';
+        meta.original = a1;
+        meta.usd = a2;
       } else {
+        // Single amount: a pesos (UYU) charge.
         amount = a1;
         currency = 'UYU';
+        meta.uyu = a1;
       }
       // statement sign: + = charge (debt up), - = credit (debt down). Keep statement sign;
       // consolidation flips charges into negative expense items.
@@ -153,7 +162,7 @@ export async function parseItauCardPdf(buffer: Buffer, filename: string): Promis
         amount,
         currency,
         kind: isReduc ? 'refund' : 'purchase',
-        metadata: { rawLine: line, uyu: a1, usd: a2 ?? undefined },
+        metadata: meta,
       });
       matched++;
     }

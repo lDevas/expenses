@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import type { ConsolidatedPosition, ConsolidatedResult } from '../types/models';
-
-const API_URL = 'http://localhost:3456/api';
+import { apiFetch } from '../lib/api';
+import EmptyState from '../components/EmptyState';
 
 function money(n: number | undefined, ccy: string): string {
   if (n === undefined || n === null) return '—';
@@ -17,12 +17,7 @@ export default function Insights() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch(`${API_URL}/statements/consolidated`)
-      .then(async (res) => {
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-        return data;
-      })
+    apiFetch<ConsolidatedResult>('/statements/consolidated')
       .then((data) => setResult(data))
       .catch((e: Error) => setError(e.message));
   }, []);
@@ -37,10 +32,17 @@ export default function Insights() {
   }
   if (!result) {
     return (
-      <div>
+      <>
         <h1>Insights</h1>
-        <p className="muted">No consolidation run yet — upload statement files on the Breakdown page.</p>
-      </div>
+        <p>Investment performance: positions, realized P/L, and income.</p>
+        <EmptyState
+          title="No insights yet"
+          description="Upload broker statements to analyze your investment positions, realized gains/losses, and income."
+          icon="📈"
+          actionLabel="Upload Statements"
+          actionTo="/upload"
+        />
+      </>
     );
   }
 

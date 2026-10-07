@@ -235,6 +235,18 @@ export interface ConsolidatedResult {
   issues: ConsolidatedIssue[];
 }
 
+// Summary returned by POST /api/statements/upload.
+export interface ConsolidatedUploadSummary {
+  runId: string;
+  itemCount: number;
+  transferCount: number;
+  exchangeCount: number;
+  positionCount: number;
+  realizedCount: number;
+  issueCount: number;
+  files: string[];
+}
+
 // ─── Utility / ID Generation ───
 
 export function generateId(): string {

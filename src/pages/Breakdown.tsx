@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
-import type { ConsolidatedItem, ConsolidatedResult, ConsolidatedCategory } from '../types/models';
-
-const API_URL = 'http://localhost:3456/api';
+import type { ConsolidatedItem, ConsolidatedResult, ConsolidatedCategory, ConsolidatedUploadSummary } from '../types/models';
+import { apiFetch } from '../lib/api';
+import EmptyState from '../components/EmptyState';
 
 const CATEGORY_ORDER: ConsolidatedCategory[] = [
   'expense',
@@ -38,10 +38,8 @@ export default function Breakdown() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const load = () => {
-    fetch(`${API_URL}/statements/consolidated`)
-      .then(async (r) => {
-        const data = await r.json();
-        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    apiFetch<ConsolidatedResult>('/statements/consolidated')
+      .then((data) => {
         setResult(data);
         setError(null);
       })
@@ -57,9 +55,7 @@ export default function Breakdown() {
     const formData = new FormData();
     for (const file of Array.from(files)) formData.append('file', file);
     try {
-      const res = await fetch(`${API_URL}/statements/upload`, { method: 'POST', body: formData });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      const data = await apiFetch<ConsolidatedUploadSummary>('/statements/upload', { method: 'POST', body: formData });
       setUploadMsg(
         `Consolidated ${data.files.length} files: ${data.itemCount} items, ${data.transferCount} transfers, ${data.exchangeCount} exchanges, ${data.positionCount} positions, ${data.realizedCount} realized, ${data.issueCount} issues`,
       );
@@ -96,7 +92,13 @@ export default function Breakdown() {
       </div>
 
       {!result ? (
-        <p className="muted">No consolidation run yet — upload statement files above.</p>
+        <EmptyState
+          title="No consolidation yet"
+          description="Upload bank and broker statements to see a consolidated view of transactions, transfers, exchanges, positions, and realized P/L."
+          icon="📊"
+          actionLabel="Browse Files"
+          onAction={() => fileInputRef.current?.click()}
+        />
       ) : (
         <>
           <div className="stat-grid">

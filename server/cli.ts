@@ -31,7 +31,7 @@ program
     }
     
     console.log('📁 Initializing database...');
-    console.log('✅ Database initialized at ~/.seville/data/seville.db');
+    console.log('✅ Database initialized at ./data/expenses.db');
     console.log('🏦 Seeded 5 default institutions.');
     console.log('\nNext steps:');
     console.log('  1. Export browser sessions: seville setup-cookies <institution-id>');
@@ -52,7 +52,7 @@ program
     }
     
     console.log(`✅ Session exported for ${institutionId}`);
-    console.log(`   Cookies saved to ~/.seville/cookies/${institutionId}.json`);
+    console.log(`   Cookies saved to ./data/cookies/${institutionId}.json`);
     console.log(`   You can now run: seville ingest ${institutionId}`);
   });
 
@@ -296,7 +296,7 @@ program
       }
     }
 
-    const dbPath = opts.db || path.join(os.tmpdir(), 'seville', `consolidate-${Date.now()}.db`);
+    const dbPath = opts.db || path.join(path.resolve('.'), 'data', `consolidate-${Date.now()}.db`);
     console.log(`📁 Database: ${dbPath}`);
     const queries = openStatementsDatabase(dbPath);
     const { result, statements } = await runConsolidationFromPaths(files, queries);

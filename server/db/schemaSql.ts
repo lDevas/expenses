@@ -43,12 +43,14 @@ export const SCHEMA_SQL = `
       metadata TEXT,
       source TEXT NOT NULL,
       imported_at TEXT NOT NULL,
+      content_hash TEXT,
       FOREIGN KEY (account_id) REFERENCES accounts(id)
     );
 
     CREATE INDEX IF NOT EXISTS idx_transactions_account_id ON transactions(account_id);
     CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
     CREATE INDEX IF NOT EXISTS idx_transactions_account_date ON transactions(account_id, date);
+    CREATE INDEX IF NOT EXISTS idx_transactions_content_hash ON transactions(content_hash);
 
     CREATE TABLE IF NOT EXISTS ingestion_runs (
       id TEXT PRIMARY KEY,
@@ -84,6 +86,7 @@ export const SCHEMA_SQL = `
       id TEXT PRIMARY KEY,
       generated_at TEXT NOT NULL,
       files TEXT NOT NULL,
+      file_hash TEXT,
       item_count INTEGER NOT NULL DEFAULT 0,
       transfer_count INTEGER NOT NULL DEFAULT 0,
       exchange_count INTEGER NOT NULL DEFAULT 0,
@@ -191,4 +194,17 @@ export function applySchema(db: DatabaseType): void {
   if (!hasRunId) {
     db.exec(`ALTER TABLE transactions ADD COLUMN run_id TEXT`);
   }
+
+  const hasContentHash = (db.prepare(`SELECT COUNT(*) AS n FROM pragma_table_info('transactions') WHERE name = 'content_hash'`).get() as { n: number }).n;
+  if (!hasContentHash) {
+    db.exec(`ALTER TABLE transactions ADD COLUMN content_hash TEXT`);
+  }
+
+  const hasFileHash = (db.prepare(`SELECT COUNT(*) AS n FROM pragma_table_info('consolidation_runs') WHERE name = 'file_hash'`).get() as { n: number }).n;
+  if (!hasFileHash) {
+    db.exec(`ALTER TABLE consolidation_runs ADD COLUMN file_hash TEXT`);
+  }
+
+  // Ensure content_hash index exists
+  db.prepare(`CREATE INDEX IF NOT EXISTS idx_transactions_content_hash ON transactions(content_hash)`).run();
 }
