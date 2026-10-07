@@ -34,6 +34,7 @@
     "server/ingestion/parsers/ibkrCsv.ts",
     "server/ingestion/parsers/etoroXlsx.ts",
     "server/db/queries.ts",
-    "server/pipeline.ts"
+    "server/pipeline.ts",
+    "server/server.ts"
   ]
 }

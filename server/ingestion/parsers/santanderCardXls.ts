@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import Papa from 'papaparse';
 import {
   parseAmount,
   parseStatementDate,
@@ -34,20 +35,27 @@ export function parseSantanderCardXls(buffer: Buffer, filename: string): ParsedS
     issues,
   };
 
-  let wb: XLSX.WorkBook;
+  let rows: unknown[][];
+  let sheetName: string | undefined;
   try {
-    wb = XLSX.read(buffer, { type: 'buffer' });
+    if (/\.csv$/i.test(filename)) {
+      // Spreadsheet auto-detection interprets DD/MM text as US dates/serials.
+      // Santander exports may be Latin-1 or UTF-8; neither needs type coercion.
+      let text: string;
+      try { text = new TextDecoder('utf-8', { fatal: true }).decode(buffer); }
+      catch { text = buffer.toString('latin1'); }
+      rows = Papa.parse<string[]>(text, { dynamicTyping: false, skipEmptyLines: true }).data;
+    } else {
+      const wb = XLSX.read(buffer, { type: 'buffer' });
+      sheetName = wb.SheetNames[0];
+      const ws = wb.Sheets[sheetName];
+      if (!ws) throw new Error('Workbook has no sheets');
+      rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' }) as unknown[][];
+    }
   } catch (e) {
-    issues.push({ file: filename, severity: 'error', message: `Could not read the Excel file: ${errMsg(e)}` });
+    issues.push({ file: filename, severity: 'error', message: `Could not read the statement: ${errMsg(e)}` });
     return result;
   }
-  const sheetName = wb.SheetNames[0];
-  const ws = wb.Sheets[sheetName];
-  if (!ws) {
-    issues.push({ file: filename, sheet: sheetName, severity: 'error', message: 'Workbook has no sheets' });
-    return result;
-  }
-  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' }) as unknown[][];
   const acc = result.account;
 
   const headerIdx = rows.findIndex((r) => r.some((c) => cellText(c) === 'Fecha') && r.some((c) => cellText(c) === 'Descripción'));
@@ -91,7 +99,7 @@ export function parseSantanderCardXls(buffer: Buffer, filename: string): ParsedS
   let netDollars = 0;
   for (let i = headerIdx + 1; i < rows.length; i++) {
     const r = rows[i];
-    const date = parseStatementDate(cell(r, iDate));
+    const date = parseStatementDate(r[iDate]);
     if (!date) {
       if (cell(r, iDesc)) issues.push({ file: filename, sheet: sheetName, row: i + 1, field: 'Fecha', raw: cell(r, iDate), severity: 'warning', message: 'Unparseable date — row skipped' });
       continue;

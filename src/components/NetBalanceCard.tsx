@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import type { Transaction } from '../types/models';
-import { convertToUyu, convertToUsd, formatMoney, type FxInfo } from '../lib/finance';
+import { convertToUyu, convertToUsd, formatMoney, isFinancialTransaction, type FxInfo } from '../lib/finance';
 
 interface NetBalanceCardProps {
   transactions: Transaction[];
@@ -13,7 +13,7 @@ export default function NetBalanceCard({ transactions, fx }: NetBalanceCardProps
     let convertedUsd = 0, convertedUyu = 0;
     let anyConverted = true;
 
-    for (const t of transactions) {
+    for (const t of transactions.filter(isFinancialTransaction)) {
       const tUsd = convertToUsd(t.amount, t.currency, fx);
       const tUyu = convertToUyu(t.amount, t.currency, fx);
       if (!isNaN(tUsd)) convertedUsd += tUsd; else anyConverted = false;
@@ -34,8 +34,8 @@ export default function NetBalanceCard({ transactions, fx }: NetBalanceCardProps
     };
   }, [transactions, fx]);
 
-  const hasUsd = transactions.some((t) => t.currency === 'USD');
-  const hasUyu = transactions.some((t) => t.currency === 'UYU');
+  const hasUsd = transactions.some((t) => isFinancialTransaction(t) && t.currency === 'USD');
+  const hasUyu = transactions.some((t) => isFinancialTransaction(t) && t.currency === 'UYU');
 
   const fmt = (v: number, ccy: string) => (v >= 0 ? '' : '−') + formatMoney(Math.abs(v), ccy);
   const cls = (v: number) => (v >= 0 ? 'positive' : 'negative');
@@ -43,6 +43,7 @@ export default function NetBalanceCard({ transactions, fx }: NetBalanceCardProps
   return (
     <section className="balance-card">
       <h2>Net Balance</h2>
+      {!hasUsd && !hasUyu && <p>No income or expenses in this period.</p>}
       <div className="balance-values">
         {hasUsd && (
           <div>

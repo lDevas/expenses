@@ -1,10 +1,15 @@
+import { createHash } from 'node:crypto';
 import { type Database as DatabaseType } from 'better-sqlite3';
+import { coverageGaps, mergeCoverage, statementCoverage } from '../ingestion/coverage.ts';
+import { consolidate } from '../ingestion/consolidation.ts';
+import { fingerprint, itemFingerprint, readConsolidated, readStatement, statementKey } from '../ingestion/identity.ts';
+import { toISODate } from '../ingestion/types.ts';
 import { generateId, now } from '../../src/types/models.ts';
 import type {
   Institution, Account, Transaction,
   IngestionRun, IngestionStep, BrowserSession,
   InstitutionStatus, IngestionStatus,
-  StepResult, TransactionSource,
+  StepResult, TransactionSource, AccountUploadCoverage, ConsolidationRunSummary,
 } from '../../src/types/models.ts';
 import type {
   ConsolidatedResult, ConsolidatedItem, ConsolidatedTransfer, ConsolidatedExchange,
@@ -181,8 +186,8 @@ export class DatabaseQueries {
   saveAccount(account: Account): void {
     this.db.prepare(
       `INSERT INTO accounts
-       (id, institution_id, name, type, currency, balance, balance_date, account_number)
-       VALUES (@id, @institutionId, @name, @type, @currency, @balance, @balanceDate, @accountNumber)`
+       (id, institution_id, name, type, currency, balance, balance_date, account_number, balance_known)
+       VALUES (@id, @institutionId, @name, @type, @currency, @balance, @balanceDate, @accountNumber, 1)`
     ).run({
       id: account.id,
       institutionId: account.institutionId,
@@ -198,14 +203,15 @@ export class DatabaseQueries {
   upsertAccount(account: Account): void {
     this.db.prepare(
       `INSERT INTO accounts
-       (id, institution_id, name, type, currency, balance, balance_date, account_number)
-       VALUES (@id, @institutionId, @name, @type, @currency, @balance, @balanceDate, @accountNumber)
+       (id, institution_id, name, type, currency, balance, balance_date, account_number, balance_known)
+       VALUES (@id, @institutionId, @name, @type, @currency, @balance, @balanceDate, @accountNumber, 1)
        ON CONFLICT(id) DO UPDATE SET
          name = excluded.name,
          type = excluded.type,
          currency = excluded.currency,
          balance = excluded.balance,
          balance_date = excluded.balance_date,
+         balance_known = 1,
          account_number = excluded.account_number`
     ).run({
       id: account.id,
@@ -289,35 +295,6 @@ export class DatabaseQueries {
       importedAt: serializeDate(txn.importedAt),
       contentHash,
     });
-  }
-
-  private computeFileHash(files: string[]): string {
-    const data = files.slice().sort().join('|');
-    let hash = 0;
-    for (let i = 0; i < data.length; i++) {
-      const chr = data.charCodeAt(i);
-      hash = ((hash << 5) - hash) + chr;
-      hash |= 0;
-    }
-    return Math.abs(hash).toString(16);
-  }
-
-  private computeItemHash(item: { accountId: string; date: Date; description: string; amount: number; currency: string; reference?: string }): string {
-    const data = [
-      item.accountId,
-      item.date.toISOString(),
-      item.description,
-      item.amount.toFixed(2),
-      item.currency,
-      item.reference || '',
-    ].join('|');
-    let hash = 0;
-    for (let i = 0; i < data.length; i++) {
-      const chr = data.charCodeAt(i);
-      hash = ((hash << 5) - hash) + chr;
-      hash |= 0;
-    }
-    return Math.abs(hash).toString(16);
   }
 
   private computeTxnHash(txn: Transaction): string {
@@ -561,16 +538,20 @@ export class DatabaseQueries {
           `INSERT OR IGNORE INTO institutions (id, name, type, country, currency)
            VALUES (?, ?, ?, ?, ?)`
         ).run(a.institutionId, a.institutionName, institutionType, country, a.currency);
-        const balanceDate = a.closingBalance !== undefined && a.balanceDate ? a.balanceDate : a.periodTo ?? new Date();
+        const balanceDate = a.balanceDate ?? a.periodTo;
+        const validBalance = Number.isFinite(a.closingBalance) && balanceDate instanceof Date && Number.isFinite(balanceDate.getTime());
         db.prepare(
-          `INSERT INTO accounts (id, institution_id, name, type, currency, balance, balance_date, account_number)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO accounts (id, institution_id, name, type, currency, balance, balance_date, account_number, balance_known)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              name = excluded.name,
              type = excluded.type,
              currency = excluded.currency,
-             balance = excluded.balance,
-             balance_date = excluded.balance_date,
+             balance = CASE WHEN excluded.balance_known = 1 AND (accounts.balance_known = 0 OR excluded.balance_date >= accounts.balance_date)
+               THEN excluded.balance ELSE accounts.balance END,
+             balance_date = CASE WHEN excluded.balance_known = 1 AND (accounts.balance_known = 0 OR excluded.balance_date >= accounts.balance_date)
+               THEN excluded.balance_date ELSE accounts.balance_date END,
+             balance_known = MAX(accounts.balance_known, excluded.balance_known),
              account_number = COALESCE(excluded.account_number, accounts.account_number)`
         ).run(
           a.id,
@@ -578,25 +559,18 @@ export class DatabaseQueries {
           a.name,
           a.type,
           a.currency,
-          a.closingBalance ?? 0,
-          serializeDate(balanceDate) || new Date().toISOString(),
+          validBalance ? a.closingBalance : 0,
+          validBalance ? serializeDate(balanceDate) : new Date(0).toISOString(),
           a.number || null,
+          validBalance ? 1 : 0,
         );
       }
 
-      const fileHash = this.computeFileHash(result.files);
-      const existingRun = this.db.prepare(
-        'SELECT id FROM consolidation_runs WHERE file_hash = ?'
-      ).get(fileHash) as { id: string } | undefined;
-
-      if (existingRun) {
-        return;
-      }
-
+      const fileHash = createHash('sha256').update(JSON.stringify(statements.map(s => s.fileHash ?? s.file).sort())).digest('hex');
       db.prepare(
         `INSERT INTO consolidation_runs
-         (id, generated_at, files, file_hash, item_count, transfer_count, exchange_count, position_count, realized_count, issue_count)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, generated_at, files, file_hash, item_count, transfer_count, exchange_count, position_count, realized_count, issue_count, result_json, sources_saved)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
       ).run(
         result.runId,
         serializeDate(result.generatedAt) || new Date().toISOString(),
@@ -608,34 +582,26 @@ export class DatabaseQueries {
         result.positions.length,
         result.realized.length,
         result.issues.length,
+        JSON.stringify(result),
       );
 
-      const insItem = db.prepare(
-        `INSERT INTO transactions
-         (id, account_id, run_id, date, post_date, description, amount, currency, category, reference, metadata, source, imported_at, content_hash)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'file-upload', ?, ?)`
-      );
-      for (const it of result.items) {
-        const contentHash = this.computeItemHash(it);
-        const existing = db.prepare('SELECT id FROM transactions WHERE content_hash = ?').get(contentHash);
-        if (existing) continue;
-
-        insItem.run(
-          it.id,
-          it.accountId,
-          result.runId,
-          serializeDate(it.date) || new Date().toISOString(),
-          null,
-          it.description,
-          it.amount,
-          it.currency,
-          it.category,
-          it.reference || null,
-          it.metadata ? JSON.stringify(it.metadata) : null,
-          serializeDate(result.generatedAt) || new Date().toISOString(),
-          contentHash,
-        );
+      const insUpload = db.prepare(`INSERT INTO account_upload_files
+        (id, account_id, run_id, file_name, file_hash, min_date, max_date, basis)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+      for (const statement of statements) {
+        if (statement.account.id === 'unknown') continue;
+        const range = statementCoverage(statement);
+        insUpload.run(generateId(), statement.account.id, result.runId, statement.file,
+          statement.fileHash ?? null, range.from, range.to, range.basis);
       }
+
+      // Validate the supplied run before persisting its immutable snapshot.
+      for (const item of result.items) {
+        if (!db.prepare('SELECT 1 FROM accounts WHERE id = ?').get(item.accountId)) {
+          throw new Error('FOREIGN KEY constraint failed: unknown item account');
+        }
+      }
+      this.reconcileSources(result, statements);
 
       const insTransfer = db.prepare(
         `INSERT INTO consolidation_transfers
@@ -710,11 +676,161 @@ export class DatabaseQueries {
     tx();
   }
 
+  /** Called inside the upload transaction: source archive and materialized view commit together. */
+  private reconcileSources(run: ConsolidatedResult, incoming: ParsedStatement[]): void {
+    const db = this.db;
+    const insertSource = db.prepare('INSERT OR IGNORE INTO statement_sources (source_key, statement_json) VALUES (?, ?)');
+    for (const s of incoming) insertSource.run(fingerprint([statementKey(s), s.file]), JSON.stringify(s));
+    const sources = (db.prepare('SELECT statement_json FROM statement_sources ORDER BY source_key').all() as { statement_json: string }[])
+      .map(row => readStatement(row.statement_json));
+    const current = consolidate(sources);
+    current.runId = run.runId;
+    current.generatedAt = run.generatedAt;
+    current.files = [...new Set(current.files)];
+
+    // Freeze pre-migration runs before replacing any of their transaction rows.
+    // Raw sources cannot be recovered from old netted items. Retain unrepresented
+    // legacy data, and replace it only when the source is re-uploaded or a row is
+    // positively identified by its financial fields.
+    const sourceHashes = new Set(sources.map(s => s.fileHash).filter(Boolean));
+    const legacyRuns = db.prepare('SELECT id, files FROM consolidation_runs WHERE sources_saved = 0').all() as { id: string; files: string }[];
+    const remainingLegacy: ConsolidatedResult[] = [];
+    for (const legacy of legacyRuns) {
+      const snapshot = this.getConsolidated(legacy.id)!;
+      db.prepare('UPDATE consolidation_runs SET result_json = COALESCE(result_json, ?) WHERE id = ?').run(JSON.stringify(snapshot), legacy.id);
+      const files = db.prepare('SELECT file_hash FROM account_upload_files WHERE run_id = ?').all(legacy.id) as { file_hash: string | null }[];
+      const covered = files.length === (JSON.parse(legacy.files) as string[]).length && files.length > 0 && files.every(f => f.file_hash && sourceHashes.has(f.file_hash));
+      if (covered) {
+        db.prepare("DELETE FROM transactions WHERE run_id = ? AND source = 'file-upload' AND reconciled = 0").run(legacy.id);
+      } else remainingLegacy.push(snapshot);
+    }
+
+    const oldItems = db.prepare("SELECT * FROM transactions WHERE source = 'file-upload' AND reconciled = 0").all() as Record<string, unknown>[];
+    if (oldItems.length) {
+      const identifiable = new Set(current.items.map(itemFingerprint));
+      // Include single-source items that disappear when a later upload supplies
+      // their counterpart (e.g. card payments) or condenses a reimbursement.
+      for (const s of sources) for (const item of consolidate([s]).items) identifiable.add(itemFingerprint(item));
+      for (const row of oldItems) {
+        if (identifiable.has(itemFingerprint(mapRowToTransaction(row)))) db.prepare('DELETE FROM transactions WHERE id = ?').run(row.id);
+      }
+    }
+
+    db.prepare('DELETE FROM transactions WHERE reconciled = 1').run();
+    const insert = db.prepare(`INSERT INTO transactions
+      (id, account_id, run_id, date, description, amount, currency, category, reference, metadata, source, imported_at, content_hash, reconciled)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'file-upload', ?, ?, 1)`);
+    const occurrences = new Map<string, number>();
+    for (const item of current.items) {
+      const base = itemFingerprint(item);
+      const ordinal = occurrences.get(base) ?? 0;
+      occurrences.set(base, ordinal + 1);
+      const identity = fingerprint([base, ordinal]);
+      item.id = `statement-${identity}`;
+      insert.run(item.id, item.accountId, run.runId, serializeDate(item.date), item.description,
+        item.amount, item.currency, item.category, item.reference ?? null, serializeMetadata(item.metadata),
+        serializeDate(run.generatedAt), identity);
+    }
+
+    const retained = db.prepare("SELECT t.*, a.name AS account_label FROM transactions t JOIN accounts a ON a.id = t.account_id WHERE t.source = 'file-upload' AND t.reconciled = 0").all() as Record<string, unknown>[];
+    for (const row of retained) current.items.push({ ...mapRowToTransaction(row),
+      accountLabel: row.account_label as string, category: (row.category || 'other') as ConsolidatedItem['category'], sourceFiles: [],
+    });
+    // Recover old rounded rates from their saved amounts. Freshly reconciled
+    // rates already use raw precision, so do not recalculate those from rounded
+    // output amounts. Historical JSON was frozen above and remains unchanged.
+    for (const legacy of remainingLegacy) for (const exchange of legacy.exchanges) {
+      if ((exchange.fromAmount ?? 0) > 0 && (exchange.toAmount ?? 0) > 0) {
+        exchange.impliedRate = exchange.toAmount! / exchange.fromAmount!;
+      }
+    }
+    // Retain legacy investments/transfers without counting repeated historical
+    // uploads twice. Occurrence-aware merging also preserves repeated positions.
+    for (const field of ['transfers', 'exchanges', 'positions', 'realized'] as const) {
+      const counts = new Map<string, number>();
+      const key = (record: object) => {
+        const fields = Object.fromEntries(Object.entries(record)
+          .filter(([k]) => !['id', 'sourceFiles', 'metadata', 'name', 'accountLabel', 'fromAccountLabel', 'toAccountLabel', 'impliedRate'].includes(k))
+          .sort(([a], [b]) => a.localeCompare(b)));
+        return fingerprint(fields);
+      };
+      for (const record of current[field]) { const k = key(record); counts.set(k, (counts.get(k) ?? 0) + 1); }
+      for (const legacy of remainingLegacy) {
+        const seen = new Map<string, number>();
+        for (const record of legacy[field]) {
+          const k = key(record);
+          const n = (seen.get(k) ?? 0) + 1;
+          seen.set(k, n);
+          if (n > (counts.get(k) ?? 0)) {
+            // The field and record are correlated by the loop above.
+            (current[field] as object[]).push(record);
+            counts.set(k, n);
+          }
+        }
+      }
+    }
+    if (remainingLegacy.length || retained.length) current.issues.push({ file: '(saved history)', severity: 'warning',
+      message: 'Some earlier uploads have no saved parsed source. Their financial records are retained, but cannot be fully reconciled. Re-upload those statements to rebuild them accurately; historical run details will remain unchanged.',
+    });
+    db.prepare('INSERT INTO consolidation_state (id, result_json) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET result_json = excluded.result_json')
+      .run(JSON.stringify(current));
+  }
+
+  getAccountUploadRanges(today = toISODate(new Date())): AccountUploadCoverage[] {
+    const accounts = this.db.prepare(`SELECT a.*, i.name AS institution_name
+      FROM accounts a JOIN institutions i ON i.id = a.institution_id
+      ORDER BY i.name, a.name, a.id`).all() as Record<string, unknown>[];
+    const rows = this.db.prepare(`SELECT u.*, r.generated_at FROM account_upload_files u
+      JOIN consolidation_runs r ON r.id = u.run_id
+      ORDER BY r.generated_at DESC, r.rowid DESC, u.rowid DESC`).all() as Record<string, unknown>[];
+    return accounts.map(a => {
+      const files = rows.filter(r => r.account_id === a.id);
+      const ranges = mergeCoverage(files.filter(r => r.min_date && r.max_date).map(r => ({
+        from: r.min_date as string, to: r.max_date as string,
+      })));
+      return {
+        accountId: a.id as string, institutionId: a.institution_id as string,
+        institutionName: a.institution_name as string, accountName: a.name as string,
+        accountNumber: (a.account_number as string) || null, currency: a.currency as string,
+        minDate: ranges[0]?.from ?? null, maxDate: ranges.at(-1)?.to ?? null,
+        lastUploadAt: (files[0]?.generated_at as string) ?? null,
+        latestRunId: (files[0]?.run_id as string) ?? null,
+        fileCount: new Set(files.filter(r => r.file_name).map(r => r.file_hash ?? `${r.run_id}:${r.file_name}`)).size,
+        ranges, gaps: coverageGaps(ranges, today),
+        uploads: files.map(r => ({ file: r.file_name as string | null, runId: r.run_id as string,
+          uploadedAt: r.generated_at as string, from: r.min_date as string | null,
+          to: r.max_date as string | null, basis: r.basis as AccountUploadCoverage['uploads'][number]['basis'],
+        })),
+        hasInferredCoverage: files.some(r => r.basis === 'activity' || r.basis === 'legacy'),
+        hasLegacyUploads: files.some(r => r.basis === 'legacy'),
+      };
+    });
+  }
+
+  getConsolidationRuns(): ConsolidationRunSummary[] {
+    const rows = this.db.prepare('SELECT * FROM consolidation_runs ORDER BY generated_at DESC, rowid DESC')
+      .all() as Record<string, unknown>[];
+    return rows.map(r => ({
+      runId: r.id as string, generatedAt: r.generated_at as string,
+      files: JSON.parse(r.files as string) as string[],
+      itemCount: r.item_count as number, transferCount: r.transfer_count as number,
+      exchangeCount: r.exchange_count as number, positionCount: r.position_count as number,
+      realizedCount: r.realized_count as number, issueCount: r.issue_count as number,
+    }));
+  }
+
   /** Latest FX exchange across all accounts (used to normalize UYU/USD on the Dashboard). */
   getLatestExchange(): ConsolidatedExchange | null {
+    const state = this.db.prepare('SELECT result_json FROM consolidation_state WHERE id = 1').get() as { result_json: string } | undefined;
+    if (state) {
+      return readConsolidated(state.result_json).exchanges
+        .filter(e => e.matchStatus === 'matched' && (e.impliedRate ?? 0) > 0 && ['USD/UYU', 'UYU/USD'].includes(`${e.fromCurrency}/${e.toCurrency}`))
+        .sort((a, b) => (b.date?.getTime() ?? 0) - (a.date?.getTime() ?? 0))[0] ?? null;
+    }
     const row = this.db.prepare(
       `SELECT * FROM consolidation_exchanges
-       WHERE implied_rate IS NOT NULL AND implied_rate > 0
+       WHERE implied_rate IS NOT NULL AND implied_rate > 0 AND match_status = 'matched'
+         AND ((from_currency = 'USD' AND to_currency = 'UYU') OR (from_currency = 'UYU' AND to_currency = 'USD'))
        ORDER BY date DESC, rowid DESC
        LIMIT 1`
     ).get() as Record<string, unknown> | undefined;
@@ -724,31 +840,38 @@ export class DatabaseQueries {
       matchStatus: row.match_status as ConsolidatedExchange['matchStatus'],
       accountId: (row.account_id as string) || undefined,
       accountLabel: (row.account_label as string) || '',
-      date: (row.date as string) || undefined,
+      date: deserializeDate(row.date) ?? undefined,
       description: (row.description as string) || undefined,
       fromCurrency: (row.from_currency as string) || undefined,
       fromAmount: (row.from_amount as number) || undefined,
       toCurrency: (row.to_currency as string) || undefined,
       toAmount: (row.to_amount as number) || undefined,
-      impliedRate: (row.implied_rate as number) || undefined,
+      impliedRate: Number(row.from_amount) > 0 && Number(row.to_amount) > 0 ? Number(row.to_amount) / Number(row.from_amount) : undefined,
       sourceFiles: JSON.parse((row.source_files as string) || '[]'),
     };
   }
 
   getLatestConsolidationRunId(): string | null {
     const row = this.db.prepare(
-      'SELECT id FROM consolidation_runs ORDER BY generated_at DESC LIMIT 1'
+      'SELECT id FROM consolidation_runs ORDER BY generated_at DESC, rowid DESC LIMIT 1'
     ).get() as { id: string } | undefined;
     return row?.id ?? null;
   }
 
   getConsolidated(runId?: string): ConsolidatedResult | null {
+    if (!runId) {
+      const state = this.db.prepare('SELECT result_json FROM consolidation_state WHERE id = 1').get() as { result_json: string } | undefined;
+      if (state) return readConsolidated(state.result_json);
+    }
     const id = runId ?? this.getLatestConsolidationRunId();
     if (!id) return null;
     const run = this.db.prepare(
       'SELECT * FROM consolidation_runs WHERE id = ?'
     ).get(id) as Record<string, unknown> | undefined;
     if (!run) return null;
+    // Preserve the full per-run result even when its transactions were already
+    // imported by an earlier batch. Financial tables still deduplicate items.
+    if (run.result_json) return readConsolidated(run.result_json as string);
 
     const items = this.db.prepare(
       `SELECT t.*, a.name AS account_label

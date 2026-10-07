@@ -24,6 +24,7 @@ export const SCHEMA_SQL = `
       currency TEXT NOT NULL,
       balance REAL NOT NULL DEFAULT 0,
       balance_date TEXT NOT NULL,
+      balance_known INTEGER NOT NULL DEFAULT 0,
       account_number TEXT,
       FOREIGN KEY (institution_id) REFERENCES institutions(id)
     );
@@ -50,7 +51,6 @@ export const SCHEMA_SQL = `
     CREATE INDEX IF NOT EXISTS idx_transactions_account_id ON transactions(account_id);
     CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
     CREATE INDEX IF NOT EXISTS idx_transactions_account_date ON transactions(account_id, date);
-    CREATE INDEX IF NOT EXISTS idx_transactions_content_hash ON transactions(content_hash);
 
     CREATE TABLE IF NOT EXISTS ingestion_runs (
       id TEXT PRIMARY KEY,
@@ -92,8 +92,22 @@ export const SCHEMA_SQL = `
       exchange_count INTEGER NOT NULL DEFAULT 0,
       position_count INTEGER NOT NULL DEFAULT 0,
       realized_count INTEGER NOT NULL DEFAULT 0,
-      issue_count INTEGER NOT NULL DEFAULT 0
+      issue_count INTEGER NOT NULL DEFAULT 0,
+      result_json TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS account_upload_files (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL REFERENCES accounts(id),
+      run_id TEXT NOT NULL REFERENCES consolidation_runs(id) ON DELETE CASCADE,
+      file_name TEXT,
+      file_hash TEXT,
+      min_date TEXT,
+      max_date TEXT,
+      basis TEXT NOT NULL CHECK(basis IN ('statement', 'activity', 'legacy', 'unknown'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_account_upload_files_account ON account_upload_files(account_id);
+    CREATE INDEX IF NOT EXISTS idx_account_upload_files_run ON account_upload_files(run_id);
 
     CREATE TABLE IF NOT EXISTS consolidation_transfers (
       id TEXT PRIMARY KEY,
@@ -166,6 +180,16 @@ export const SCHEMA_SQL = `
       source_files TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS statement_sources (
+      source_key TEXT PRIMARY KEY,
+      statement_json TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS consolidation_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      result_json TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS consolidation_issues (
       id TEXT PRIMARY KEY,
       run_id TEXT NOT NULL REFERENCES consolidation_runs(id) ON DELETE CASCADE,
@@ -183,7 +207,7 @@ export const SCHEMA_SQL = `
     CREATE INDEX IF NOT EXISTS idx_consolidation_positions_run ON consolidation_positions(run_id);
     CREATE INDEX IF NOT EXISTS idx_consolidation_realized_run ON consolidation_realized(run_id);
     CREATE INDEX IF NOT EXISTS idx_consolidation_issues_run ON consolidation_issues(run_id);
-    CREATE INDEX IF NOT EXISTS idx_transactions_run ON transactions(run_id);
+
   `;
 
 /** Apply the schema, including safe migrations for databases that predate new columns. */
@@ -204,6 +228,38 @@ export function applySchema(db: DatabaseType): void {
   if (!hasFileHash) {
     db.exec(`ALTER TABLE consolidation_runs ADD COLUMN file_hash TEXT`);
   }
+
+  const hasResult = (db.prepare(`SELECT COUNT(*) AS n FROM pragma_table_info('consolidation_runs') WHERE name = 'result_json'`).get() as { n: number }).n;
+  if (!hasResult) db.exec('ALTER TABLE consolidation_runs ADD COLUMN result_json TEXT');
+  const columns = (table: string) => new Set((db.prepare(`SELECT name FROM pragma_table_info('${table}')`).all() as { name: string }[]).map(c => c.name));
+  if (!columns('transactions').has('reconciled')) db.exec('ALTER TABLE transactions ADD COLUMN reconciled INTEGER NOT NULL DEFAULT 0');
+  // Existing balances were previously persisted without a validity flag.
+  if (!columns('accounts').has('balance_known')) db.exec('ALTER TABLE accounts ADD COLUMN balance_known INTEGER NOT NULL DEFAULT 1');
+  if (!columns('consolidation_runs').has('sources_saved')) db.exec('ALTER TABLE consolidation_runs ADD COLUMN sources_saved INTEGER NOT NULL DEFAULT 0');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_transactions_run ON transactions(run_id)');
+
+  // Older runs did not retain per-file statement periods. Recover only observed
+  // activity bounds, including transfer-only and position-only accounts. Never
+  // invent a statement period or assign every batch file to every account.
+  db.exec(`
+    INSERT OR IGNORE INTO account_upload_files (id, account_id, run_id, min_date, max_date, basis)
+    SELECT 'legacy:' || d.account_id || ':' || d.run_id, d.account_id, d.run_id,
+           MIN(substr(d.date, 1, 10)), MAX(substr(d.date, 1, 10)), 'legacy'
+    FROM (
+      SELECT account_id, run_id, date FROM transactions WHERE source = 'file-upload'
+      UNION ALL SELECT from_account_id, run_id, from_date FROM consolidation_transfers
+      UNION ALL SELECT to_account_id, run_id, to_date FROM consolidation_transfers
+      UNION ALL SELECT account_id, run_id, date FROM consolidation_exchanges
+      UNION ALL SELECT account_id, run_id, snapshot_date FROM consolidation_positions
+      UNION ALL SELECT account_id, run_id, date FROM consolidation_realized
+    ) d
+    JOIN accounts a ON a.id = d.account_id
+    JOIN consolidation_runs r ON r.id = d.run_id
+    WHERE r.result_json IS NULL AND d.date IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM account_upload_files u WHERE u.account_id = d.account_id AND u.run_id = d.run_id
+    )
+    GROUP BY d.account_id, d.run_id
+  `);
 
   // Ensure content_hash index exists
   db.prepare(`CREATE INDEX IF NOT EXISTS idx_transactions_content_hash ON transactions(content_hash)`).run();

@@ -85,6 +85,7 @@ export function parseEtoroXlsx(buffer: Buffer, filename: string): ParsedStatemen
       }
       if (key === 'End Date') {
         acc.periodTo = parseStatementDate(cellText(value)) ?? undefined;
+        acc.periodSource = 'statement';
         continue;
       }
       const n = parseAmount(value);

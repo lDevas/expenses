@@ -70,44 +70,6 @@ export interface IngestionStep {
 
 export type StepResult = 'success' | 'skipped' | 'failed';
 
-// ─── AI Agent Types ───
-
-export interface AgentConfig {
-  id: string;
-  name: string;
-  type: InstitutionType;
-  country: string;
-  currency: string;
-  initialUrl: string;
-  steps: AgentStep[];
-  fallbacks?: Fallback[];
-  completionCriteria: string[];
-  parser?: 'pdf' | 'csv' | 'excel' | 'html';
-  parserOptions?: Record<string, any>;
-}
-
-export interface AgentStep {
-  id: string;
-  instruction: string;           // Plain English instructions for the LLM
-  expectedOutcome?: string;
-  maxRetries?: number;
-  timeoutSeconds?: number;
-}
-
-export interface Fallback {
-  trigger: string;               // What triggers this fallback (LLM-detected)
-  instruction: string;           // Alternative instructions
-}
-
-// ─── AI Decision Types ───
-
-export interface LlmDecision {
-  action: 'navigate' | 'click' | 'extract' | 'done' | 'wait';
-  target: string;                // Description of what to interact with
-  targetText: string;            // What is visible on screen
-  data?: Record<string, any>;    // Extracted data (transactions, positions, etc.)
-}
-
 export interface BrowserSession {
   institutionId: string;
   cookies: Record<string, any>;  // Cookie data
@@ -255,4 +217,42 @@ export function generateId(): string {
 
 export function now(): Date {
   return new Date();
+}
+
+// Per-account statement coverage, in inclusive calendar-date ranges.
+export interface UploadDateRange {
+  from: string;
+  to: string;
+}
+
+export interface AccountUploadFile {
+  file: string | null;
+  runId: string;
+  uploadedAt: string;
+  from: string | null;
+  to: string | null;
+  basis: 'statement' | 'activity' | 'legacy' | 'unknown';
+}
+
+export interface AccountUploadCoverage {
+  accountId: string;
+  institutionId: string;
+  institutionName: string;
+  accountName: string;
+  accountNumber: string | null;
+  currency: string;
+  minDate: string | null;
+  maxDate: string | null;
+  lastUploadAt: string | null;
+  fileCount: number;
+  latestRunId: string | null;
+  ranges: UploadDateRange[];
+  gaps: (UploadDateRange & { kind: 'internal' | 'trailing'; days: number })[];
+  uploads: AccountUploadFile[];
+  hasInferredCoverage: boolean;
+  hasLegacyUploads: boolean;
+}
+
+export interface ConsolidationRunSummary extends ConsolidatedUploadSummary {
+  generatedAt: string;
 }

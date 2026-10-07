@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef } from 'react';
-import type { ConsolidatedItem, ConsolidatedResult, ConsolidatedCategory, ConsolidatedUploadSummary } from '../types/models';
-import { apiFetch } from '../lib/api';
+import { useState, useEffect, useCallback } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
+import type { ConsolidatedItem, ConsolidatedResult, ConsolidatedCategory } from '../types/models';
+import { ApiError, apiFetch } from '../lib/api';
 import EmptyState from '../components/EmptyState';
 
 const CATEGORY_ORDER: ConsolidatedCategory[] = [
@@ -33,39 +34,20 @@ function sumByCurrency(items: ConsolidatedItem[]): Record<string, number> {
 export default function Breakdown() {
   const [result, setResult] = useState<ConsolidatedResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [uploadMsg, setUploadMsg] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const load = () => {
-    apiFetch<ConsolidatedResult>('/statements/consolidated')
-      .then((data) => {
-        setResult(data);
-        setError(null);
+  const [loading, setLoading] = useState(true);
+  const [params] = useSearchParams();
+  const runId = params.get('run');
+  const load = useCallback(() => {
+    setLoading(true);
+    apiFetch<ConsolidatedResult>(runId ? `/consolidation/runs/${encodeURIComponent(runId)}` : '/statements/consolidated')
+      .then((data) => { setResult(data); setError(null); })
+      .catch((e: Error) => {
+        setResult(null);
+        setError(e instanceof ApiError && e.status === 404 && !runId ? null : e.message);
       })
-      .catch((e: Error) => setError(e.message));
-  };
-
-  useEffect(load, []);
-
-  const handleFiles = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
-    setUploading(true);
-    setUploadMsg(null);
-    const formData = new FormData();
-    for (const file of Array.from(files)) formData.append('file', file);
-    try {
-      const data = await apiFetch<ConsolidatedUploadSummary>('/statements/upload', { method: 'POST', body: formData });
-      setUploadMsg(
-        `Consolidated ${data.files.length} files: ${data.itemCount} items, ${data.transferCount} transfers, ${data.exchangeCount} exchanges, ${data.positionCount} positions, ${data.realizedCount} realized, ${data.issueCount} issues`,
-      );
-      load();
-    } catch (e) {
-      setUploadMsg(e instanceof Error ? `Upload failed: ${e.message}` : 'Upload failed');
-    }
-    setUploading(false);
-    if (fileInputRef.current) fileInputRef.current.value = '';
-  };
+      .finally(() => setLoading(false));
+  }, [runId]);
+  useEffect(load, [load]);
 
   if (error) {
     return (
@@ -82,22 +64,16 @@ export default function Breakdown() {
       <h1>Breakdown</h1>
       <p>Consolidated bank &amp; broker statements, deduped and categorized. Currencies are kept separate.</p>
 
-      <div
-        className="upload-zone"
-        onClick={() => fileInputRef.current?.click()}
-      >
-        <input ref={fileInputRef} type="file" multiple accept=".pdf,.csv,.xlsx,.xls" style={{ display: 'none' }} onChange={(e) => handleFiles(e.target.files)} />
-        {uploading ? <span>Consolidating…</span> : <span>Drop statement files here, or click to browse (multi-file)</span>}
-        {uploadMsg && <span className="upload-msg">{uploadMsg}</span>}
-      </div>
+      <p className="breakdown-ingestion-link"><Link to="/ingest">Upload statements &amp; view run history →</Link></p>
+      {loading && <p role="status">Loading run…</p>}
 
-      {!result ? (
+      {loading ? null : !result ? (
         <EmptyState
           title="No consolidation yet"
           description="Upload bank and broker statements to see a consolidated view of transactions, transfers, exchanges, positions, and realized P/L."
           icon="📊"
-          actionLabel="Browse Files"
-          onAction={() => fileInputRef.current?.click()}
+          actionLabel="Upload Statements"
+          actionTo="/ingest"
         />
       ) : (
         <>
@@ -109,7 +85,7 @@ export default function Breakdown() {
             <div className="stat-card"><span>{result.realized.length}</span><label>realized</label></div>
             <div className="stat-card"><span>{result.issues.length}</span><label>issues</label></div>
           </div>
-          <p className="muted">Run {result.runId.slice(0, 8)} — generated {new Date(result.generatedAt).toLocaleString()} — {result.files.length} files</p>
+          <p className="muted">{runId ? `Run ${result.runId.slice(0, 8)}` : 'All uploaded statements'} — updated {new Date(result.generatedAt).toLocaleString()} — {result.files.length} files</p>
 
           {result.issues.length > 0 && (
             <section>

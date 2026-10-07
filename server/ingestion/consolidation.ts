@@ -10,6 +10,7 @@ import type {
 } from './types.ts';
 import { generateId, toISODate, withinDays } from './types.ts';
 import { AccountRegistry, BROKER_WIRE_KEYWORDS, isOwnAccountNumber, type RegistryAccount } from './registry.ts';
+import { deduplicateStatements } from './identity.ts';
 import type { CtxTxn } from './consolidation/pairing.ts';
 import { ctxOf, findPair, consumePair } from './consolidation/pairing.ts';
 
@@ -23,6 +24,8 @@ import { ctxOf, findPair, consumePair } from './consolidation/pairing.ts';
  *  3. true cash income (dividends, interest)      -> items (investment-income / tax)
  */
 export function consolidate(statements: ParsedStatement[]): ConsolidatedResult {
+  const files = statements.map(s => s.file);
+  statements = deduplicateStatements(statements);
   const registry = AccountRegistry.from(statements);
   const issues: Issue[] = [];
   for (const s of statements) issues.push(...s.issues);
@@ -37,7 +40,7 @@ export function consolidate(statements: ParsedStatement[]): ConsolidatedResult {
   const result: ConsolidatedResult = {
     runId: generateId(),
     generatedAt: new Date(),
-    files: statements.map((s) => s.file),
+    files,
     items: [],
     transfers: [],
     exchanges: [],
@@ -84,6 +87,10 @@ function dedup(list: string[]): string[] {
   return [...new Set(list)];
 }
 
+function sourceFiles(...rows: (CtxTxn | null | undefined)[]): string[] {
+  return dedup(rows.flatMap(t => t ? t.txn.sourceFiles ?? [t.file] : []));
+}
+
 function sameAccountNumber(a: string, b: string): boolean {
   const na = a.replace(/[^\d]/g, '');
   const nb = b.replace(/[^\d]/g, '');
@@ -119,7 +126,7 @@ function pushItem(result: ConsolidatedResult, a: CtxTxn, partner: CtxTxn | null 
     category,
     reference: a.txn.reference,
     metadata,
-    sourceFiles: dedup(partner ? [a.file, partner.file] : [a.file]),
+    sourceFiles: sourceFiles(a, partner),
   };
   result.items.push(item);
 }
@@ -171,7 +178,7 @@ function makeExchangePair(a: CtxTxn, b: CtxTxn): ConsolidatedExchange {
   const to = from === a ? b : a;
   const fromAmt = Math.abs(from.txn.amount);
   const toAmt = Math.abs(to.txn.amount);
-  const impliedRate = fromAmt > 0 && from.txn.currency !== to.txn.currency ? round2(toAmt / fromAmt) : undefined;
+  const impliedRate = fromAmt > 0 && from.txn.currency !== to.txn.currency ? toAmt / fromAmt : undefined;
   return {
     id: generateId(),
     matchStatus: 'matched',
@@ -184,7 +191,7 @@ function makeExchangePair(a: CtxTxn, b: CtxTxn): ConsolidatedExchange {
     toCurrency: to.txn.currency,
     toAmount: round2(toAmt),
     impliedRate,
-    sourceFiles: dedup([a.file, b.file]),
+    sourceFiles: sourceFiles(a, b),
   };
 }
 
@@ -199,7 +206,7 @@ function makeExchangeSingle(a: CtxTxn): ConsolidatedExchange {
     fromCurrency: a.txn.currency,
     fromAmount: round2(Math.abs(a.txn.amount)),
     impliedRate: undefined,
-    sourceFiles: [a.file],
+    sourceFiles: sourceFiles(a),
   };
 }
 
@@ -229,7 +236,7 @@ function stepCardPayments(result: ConsolidatedResult, all: CtxTxn[]): void {
       toAmount: round2(Math.abs(b.txn.amount)),
       toDate: b.txn.date,
       toDescription: b.txn.description,
-      sourceFiles: dedup([a.file, b.file]),
+      sourceFiles: sourceFiles(a, b),
     });
   }
 }
@@ -273,8 +280,8 @@ function stepBroker(result: ConsolidatedResult, all: CtxTxn[]): void {
 
   // implied UYU/USD rates from the matched FX pairs (period rate pool)
   const rates: { date: Date; rate: number }[] = result.exchanges
-    .filter((e) => e.matchStatus === 'matched' && e.impliedRate !== undefined && e.fromAmount !== undefined && e.toAmount !== undefined && e.fromAmount > 0)
-    .map((e) => ({ date: e.date ?? new Date(), rate: e.impliedRate! }));
+    .filter((e) => ['USD/UYU', 'UYU/USD'].includes(`${e.fromCurrency}/${e.toCurrency}`) && e.matchStatus === 'matched' && e.impliedRate !== undefined && e.fromAmount !== undefined && e.toAmount !== undefined && e.fromAmount > 0)
+    .map((e) => ({ date: e.date ?? new Date(), rate: e.fromCurrency === 'USD' ? e.impliedRate! : 1 / e.impliedRate! }));
 
   // 1. cash-boundary events → transfers list (always hidden from items)
   for (const a of brokerTxns) {
@@ -299,8 +306,8 @@ function stepBroker(result: ConsolidatedResult, all: CtxTxn[]): void {
       toAmount: round2(Math.abs(brokerIsFrom ? (b?.txn.amount ?? 0) : a.txn.amount)),
       toDate: brokerIsFrom ? b?.txn.date : a.txn.date,
       toDescription: brokerIsFrom ? b?.txn.description : a.txn.description,
-      impliedRate: b && a.txn.currency !== b.txn.currency && Math.abs(a.txn.amount) > 0 ? round2(Math.abs(b.txn.amount) / Math.abs(a.txn.amount)) : undefined,
-      sourceFiles: dedup(b ? [a.file, b.file] : [a.file]),
+      impliedRate: b && a.txn.currency !== b.txn.currency && Math.abs(a.txn.amount) > 0 ? (brokerIsFrom ? Math.abs(b.txn.amount / a.txn.amount) : Math.abs(a.txn.amount / b.txn.amount)) : undefined,
+      sourceFiles: sourceFiles(a, b),
     });
     if (!b) {
       result.issues.push({ file: a.file, severity: 'info', message: `Broker ${a.txn.kind} of ${a.txn.currency} ${round2(Math.abs(a.txn.amount))} on ${toISODate(a.txn.date)} has no matching bank row in this batch (expected when the bank file for that month is not provided)` });
@@ -312,7 +319,7 @@ function stepBroker(result: ConsolidatedResult, all: CtxTxn[]): void {
   // eToro style: amounts already net, gross/tax carried in the row metadata → one item per row.
   const dividends = brokerTxns.filter((t) => !t.consumed && t.txn.kind === 'dividend');
   const withholds = brokerTxns.filter((t) => !t.consumed && t.txn.kind === 'withholding');
-  const divKey = (t: CtxTxn) => `${toISODate(t.txn.date)}|${t.txn.counterparty ?? ''}`;
+  const divKey = (t: CtxTxn) => JSON.stringify([t.account.id, t.txn.currency, toISODate(t.txn.date), t.txn.counterparty ?? '']);
   const whGroups = new Map<string, CtxTxn[]>();
   for (const w of withholds) {
     const g = whGroups.get(divKey(w));
@@ -356,7 +363,7 @@ function stepBroker(result: ConsolidatedResult, all: CtxTxn[]): void {
       category: 'investment-income',
       reference: symbol || undefined,
       metadata: { symbol: first.txn.counterparty, gross, withholdingTax: tax, dividendRows: group.length },
-      sourceFiles: dedup([...group, ...taxGroup].map((t) => t.file)),
+      sourceFiles: sourceFiles(...group, ...taxGroup),
     });
   }
   // leftover withholds (no dividend group took them) → tax items
@@ -411,7 +418,8 @@ function findWirePartner(a: CtxTxn, bankTxns: CtxTxn[], rates: { date: Date; rat
     } else {
       const rate = closestRate(rates, a.txn.date);
       if (!rate) continue;
-      const expected = magA * rate;
+      if (![a.txn.currency, b.txn.currency].every(c => c === 'USD' || c === 'UYU')) continue;
+      const expected = a.txn.currency === 'USD' ? magA * rate : magA / rate;
       if (Math.abs(magB - expected) > 0.03 * expected) continue; // ±3%
     }
     const score = absDaysBetween(a.txn.date, b.txn.date);
@@ -465,14 +473,21 @@ function stepReimbursements(result: ConsolidatedResult, all: CtxTxn[]): void {
 
     // Itau PDF: "REDUC. IVA" nets against the purchase that immediately precedes it
     if (!partner && /REDUC\.? ?IVA/i.test(a.txn.description)) {
-      const idx = all.indexOf(a);
-      for (let i = idx - 1; i >= 0; i--) {
-        const b = all[i];
+      let closest = Infinity;
+      for (const b of all) {
         if (b.consumed || b.account.id !== a.account.id) continue;
+        if (b.txn.currency !== a.txn.currency) continue;
         if (b.txn.kind !== 'purchase' || b.txn.amount <= 0) continue;
         if (!withinDays(a.txn.date, b.txn.date, 0)) continue;
-        partner = b;
-        break;
+        // Deduplication can place the purchase in another export. Use original
+        // source-row order, not the flattened/deduplicated array's adjacency.
+        for (const refundRow of a.txn.sourceRows ?? []) for (const purchaseRow of b.txn.sourceRows ?? []) {
+          const distance = refundRow.index - purchaseRow.index;
+          if (refundRow.statement === purchaseRow.statement && distance > 0 && distance < closest) {
+            closest = distance;
+            partner = b;
+          }
+        }
       }
     }
 
@@ -493,7 +508,7 @@ function stepReimbursements(result: ConsolidatedResult, all: CtxTxn[]): void {
       category: 'expense',
       reference: partner.txn.reference,
       metadata: { ...((partner.txn.metadata ?? {}) as Record<string, unknown>), refund: round2(Math.abs(a.txn.amount)), refundDescription: a.txn.description },
-      sourceFiles: dedup([a.file, partner.file]),
+      sourceFiles: sourceFiles(a, partner),
     });
   }
 }
@@ -555,7 +570,7 @@ function stepPositions(result: ConsolidatedResult, statements: ParsedStatement[]
         ...p,
         id: generateId(),
         accountLabel: label,
-        sourceFiles: [s.file],
+        sourceFiles: p.sourceFiles ?? [s.file],
       };
       result.positions.push(c);
     }
@@ -572,10 +587,9 @@ function stepRealized(result: ConsolidatedResult, statements: ParsedStatement[],
         ...r,
         id: generateId(),
         accountLabel: label,
-        sourceFiles: [s.file],
+        sourceFiles: r.sourceFiles ?? [s.file],
       };
       result.realized.push(c);
     }
   }
 }
-

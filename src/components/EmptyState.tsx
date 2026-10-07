@@ -14,7 +14,7 @@ export default function EmptyState({
   description,
   icon = '📊',
   actionLabel = 'Upload Statements',
-  actionTo = '/upload',
+  actionTo = '/ingest',
   onAction,
 }: EmptyStateProps) {
   return (

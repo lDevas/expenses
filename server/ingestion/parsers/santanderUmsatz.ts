@@ -93,6 +93,7 @@ export function parseSantanderUmsatz(buffer: Buffer, filename: string): ParsedSt
           if (m) {
             result.account.periodFrom = parseStatementDate(m.slice(1, 4).join('/')) ?? undefined;
             result.account.periodTo = parseStatementDate(m.slice(4, 7).join('/')) ?? undefined;
+            result.account.periodSource = 'statement';
           }
         }
       }
@@ -184,6 +185,7 @@ export function parseSantanderUmsatz(buffer: Buffer, filename: string): ParsedSt
           if (m) {
             acc.periodFrom = parseStatementDate(m.slice(1, 4).join('/')) ?? undefined;
             acc.periodTo = parseStatementDate(m.slice(4, 7).join('/')) ?? undefined;
+            acc.periodSource = 'statement';
           }
         }
       }
@@ -220,12 +222,17 @@ export function parseSantanderUmsatz(buffer: Buffer, filename: string): ParsedSt
   }
 
   // ─── Map rows → RawTxn ───
-  let lastSaldo: number | null = null;
+  let latestBalance: { date: Date; amount: number } | undefined;
   for (const row of rows) {
     const date = parseStatementDate(row.date);
     if (!date) {
       issues.push({ file: filename, sheet: 'rows', row: row.rowNo, field: 'Fecha', raw: row.date, severity: 'warning', message: 'Unparseable date — row skipped' });
       continue;
+    }
+    const saldo = parseAmount(row.saldo);
+    // Santander exports are newest-first, including rows on the same day.
+    if (saldo !== null && (!latestBalance || date > latestBalance.date)) {
+      latestBalance = { date, amount: saldo };
     }
     const debit = parseAmount(row.debit);
     const credit = parseAmount(row.credit);
@@ -243,8 +250,6 @@ export function parseSantanderUmsatz(buffer: Buffer, filename: string): ParsedSt
     }
 
     const description = [row.concepto, row.descripcion].filter(Boolean).join(' ').replace(/\s{2,}/g, ' ').trim();
-    const saldo = parseAmount(row.saldo);
-    if (saldo !== null) lastSaldo = saldo;
 
     const [kind, counterparty] = classifySantanderConcept(description, amount);
     result.transactions.push({
@@ -260,7 +265,11 @@ export function parseSantanderUmsatz(buffer: Buffer, filename: string): ParsedSt
     });
   }
 
-  if (lastSaldo !== null) result.account.closingBalance = lastSaldo;
+  if (latestBalance) {
+    result.account.closingBalance = latestBalance.amount;
+    result.account.balanceDate = result.account.periodSource === 'statement' && result.account.periodTo && result.account.periodTo >= latestBalance.date
+      ? result.account.periodTo : latestBalance.date;
+  }
   if (result.transactions.length > 0) {
     const dates = result.transactions.map((t) => t.date);
     result.account.periodFrom = result.account.periodFrom ?? new Date(Math.min(...dates.map((d) => d.getTime())));

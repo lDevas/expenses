@@ -40,7 +40,7 @@ export default function Insights() {
           description="Upload broker statements to analyze your investment positions, realized gains/losses, and income."
           icon="📈"
           actionLabel="Upload Statements"
-          actionTo="/upload"
+          actionTo="/ingest"
         />
       </>
     );

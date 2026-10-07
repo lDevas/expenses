@@ -2,6 +2,11 @@ import type { ConsolidatedExchange, Transaction } from '../types/models';
 
 export const UNCATEGORIZED = 'Uncategorized';
 
+/** Own-account movements change location/currency, not income or spending. */
+export function isFinancialTransaction(t: Pick<Transaction, 'category'>): boolean {
+  return !['internal-transfer', 'card-payment', 'fx-exchange'].includes(t.category ?? '');
+}
+
 /** Usable FX conversion derived from the latest exchange on any account. */
 export interface FxInfo {
   usdPerUyu: number;
@@ -103,7 +108,7 @@ function buildAgg(name: string, txns: Transaction[], fx: FxInfo | null, depth = 
  */
 export function aggregateCategories(items: Transaction[], fx: FxInfo | null, topN = 10): CategoryAgg[] {
   const byCat = new Map<string, Transaction[]>();
-  for (const t of items) {
+  for (const t of items.filter(isFinancialTransaction)) {
     const key = t.category?.trim() || UNCATEGORIZED;
     const list = byCat.get(key);
     if (list) list.push(t);

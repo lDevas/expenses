@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import { createHash } from 'node:crypto';
 import * as path from 'path';
 import Database from 'better-sqlite3';
 import { DatabaseQueries } from './db/queries.ts';
@@ -20,7 +21,8 @@ export interface ConsolidationOutput {
 
 /**
  * Run the full statement pipeline over a batch of files:
- * parse each (never throws) → consolidate → persist one run to the database.
+ * parse each (never throws) → consolidate this batch → persist its immutable run
+ * and rebuild the current financial view from all saved parsed sources.
  * Returns the consolidated result plus the per-file statements (for callers
  * that want the raw parse output / issues).
  */
@@ -38,14 +40,7 @@ export async function runConsolidation(files: StatementFile[], db: DatabaseQueri
 }
 
 function computeFileHash(buf: Buffer): string {
-  // Simple deterministic hash of buffer content
-  let hash = 0;
-  for (let i = 0; i < buf.length; i++) {
-    const chr = buf[i];
-    hash = ((hash << 5) - hash) + chr;
-    hash |= 0;
-  }
-  return Math.abs(hash).toString(16);
+  return createHash('sha256').update(buf).digest('hex');
 }
 
 /** Convenience: read files from disk paths. */

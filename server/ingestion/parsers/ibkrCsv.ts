@@ -104,6 +104,7 @@ export function parseIbkrCsv(buffer: Buffer, filename: string): ParsedStatement 
     if (parts.length >= 2) {
       acc.periodFrom = parseStatementDate(parts[0]) ?? undefined;
       acc.periodTo = parseStatementDate(parts[parts.length - 1]) ?? undefined;
+      if (acc.periodFrom && acc.periodTo) acc.periodSource = 'statement';
     }
   }
 

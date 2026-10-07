@@ -40,6 +40,7 @@ export interface ParsedAccount {
   openingBalance?: number;
   closingBalance?: number;
   balanceDate?: Date;
+  periodSource?: 'statement' | 'activity';
   periodFrom?: Date;
   periodTo?: Date;
 }
@@ -63,6 +64,8 @@ export type RawTxnKind =
   | 'other';
 
 export interface RawTxn {
+  sourceFiles?: string[];
+  sourceRows?: { statement: string; index: number }[];
   accountId: string;
   date: Date;
   postDate?: Date;
@@ -76,6 +79,7 @@ export interface RawTxn {
 }
 
 export interface ParsedPosition {
+  sourceFiles?: string[];
   accountId: string;
   symbol: string;
   name?: string;
@@ -89,6 +93,7 @@ export interface ParsedPosition {
 }
 
 export interface ParsedRealized {
+  sourceFiles?: string[];
   accountId: string;
   symbol: string;
   name?: string;
