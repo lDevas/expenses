@@ -3,7 +3,9 @@ import Dashboard from './pages/Dashboard';
 import Details from './pages/Details';
 import Breakdown from './pages/Breakdown';
 import Insights from './pages/Insights';
-import IngestDashboard from './components/IngestDashboard';
+import Ingestion from './pages/Ingestion';
+import ServerStatusBanner from './components/ServerStatusBanner';
+import ErrorBoundary from './components/ErrorBoundary';
 import './App.css';
 
 function Layout() {
@@ -20,13 +22,16 @@ function Layout() {
         </ul>
       </nav>
       <main className="content">
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/details" element={<Details />} />
-          <Route path="/breakdown" element={<Breakdown />} />
-          <Route path="/insights" element={<Insights />} />
-          <Route path="/ingest" element={<IngestDashboard />} />
-        </Routes>
+        <ServerStatusBanner />
+        <ErrorBoundary>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/details" element={<Details />} />
+            <Route path="/breakdown" element={<Breakdown />} />
+            <Route path="/insights" element={<Insights />} />
+            <Route path="/ingest" element={<Ingestion />} />
+          </Routes>
+        </ErrorBoundary>
       </main>
     </div>
   );

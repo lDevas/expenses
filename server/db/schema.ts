@@ -1,14 +1,13 @@
 import Database, { type Database as DatabaseType } from 'better-sqlite3';
 import path from 'path';
-import os from 'os';
 import fs from 'fs';
 import type {
   Institution, Account, Transaction,
   InstitutionType, InstitutionStatus,
   AccountType, TransactionSource,
-} from '../../src/types/models';
+} from '../../src/types/models.ts';
 
-const DEFAULT_DB_PATH = path.join(os.homedir(), '.seville', 'data', 'seville.db');
+const DEFAULT_DB_PATH = path.join(path.resolve('.'), 'data', 'expenses.db');
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS institutions (
@@ -46,6 +45,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   metadata TEXT,
   source TEXT NOT NULL DEFAULT 'ai-ingestion' CHECK(source IN ('ai-ingestion', 'file-upload', 'manual-entry')),
   imported_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  content_hash TEXT,
   UNIQUE(account_id, date, description, amount)
 );
 

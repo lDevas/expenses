@@ -2,5 +2,21 @@
 
 [scripts]
 setup = "npm install"
-run = "npm run dev -- --port $CONDUCTOR_PORT"
 run_mode = "nonconcurrent"
+
+# Starts the API server and the web (vite) dev server together.
+[scripts.run.all]
+command = "npm run run"
+default = true
+
+# Web dev server only.
+[scripts.run.web]
+command = "npm run dev -- --port ${CONDUCTOR_PORT:-5173}"
+
+# API server only.
+[scripts.run.api]
+command = "npm run server"
+
+[[preview_urls]]
+name = "Honiara"
+url = "http://localhost:$CONDUCTOR_PORT"

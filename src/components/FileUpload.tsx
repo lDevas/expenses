@@ -1,84 +1,78 @@
-import { useState, useRef } from 'react';
-
-const API_URL = 'http://localhost:3456/api';
+import { useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { apiFetch } from '../lib/api';
+import type { ConsolidatedUploadSummary } from '../types/models';
 
 interface Props {
-  institutionId: string;
-  onUploadComplete?: (count: number) => void;
+  onUploadComplete?: () => void | Promise<void>;
 }
 
-export default function FileUpload({ institutionId, onUploadComplete }: Props) {
+export default function FileUpload({ onUploadComplete }: Props) {
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [result, setResult] = useState<{ count: number; error?: string } | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [files, setFiles] = useState<string[]>([]);
+  const [result, setResult] = useState<ConsolidatedUploadSummary | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const input = useRef<HTMLInputElement>(null);
+  const busy = useRef(false);
 
-  const handleFiles = async (files: FileList | File[]) => {
-    setUploading(true);
+  const handleFiles = async (selected: FileList | null) => {
+    if (!selected?.length || busy.current) return;
+    const batch = Array.from(selected);
+    setError(null);
     setResult(null);
-    
-    for (const file of Array.from(files)) {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('institutionId', institutionId);
-      
-      const parserType = file.name.endsWith('.pdf') ? 'pdf' 
-        : file.name.endsWith('.xlsx') || file.name.endsWith('.xls') ? 'excel'
-        : 'csv';
-      formData.append('parserType', parserType);
-      
-      try {
-        const res = await fetch(`${API_URL}/transactions/upload`, {
-          method: 'POST',
-          body: formData,
-        });
-        const data = await res.json();
-        
-        setResult({ count: data.transactionsIngested });
-        if (onUploadComplete) onUploadComplete(data.transactionsIngested);
-      } catch {
-        setResult({ count: 0, error: `Failed to process ${file.name}` });
-      }
+    if (batch.some(file => !/\.(pdf|csv|xls|xlsx)$/i.test(file.name))) {
+      setError('Choose PDF, CSV, XLS, or XLSX statement files. This batch was not uploaded.');
+      if (input.current) input.current.value = '';
+      return;
     }
-    
-    setUploading(false);
+    busy.current = true;
+    setUploading(true);
+    setFiles(batch.map(file => file.name));
+    const body = new FormData();
+    for (const file of batch) body.append('file', file);
+    try {
+      const summary = await apiFetch<ConsolidatedUploadSummary>('/statements/upload', { method: 'POST', body });
+      setResult(summary);
+      await onUploadComplete?.();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Upload failed. Try again.');
+    } finally {
+      busy.current = false;
+      setUploading(false);
+      if (input.current) input.current.value = '';
+    }
   };
 
   return (
-    <div 
-      className={`upload-zone ${dragging ? 'dragging' : ''} ${uploading ? 'uploading' : ''}`}
-      onDragOver={e => { e.preventDefault(); setDragging(true); }}
-      onDragLeave={() => setDragging(false)}
-      onDrop={e => { 
-        e.preventDefault(); 
-        setDragging(false); 
-        handleFiles(e.dataTransfer.files); 
-      }}
-      onClick={() => fileInputRef.current?.click()}
-    >
-      <input 
-        ref={fileInputRef}
-        type="file" 
-        multiple 
-        accept=".pdf,.csv,.xlsx,.xls"
-        style={{ display: 'none' }}
-        onChange={e => e.target.files && handleFiles(e.target.files)}
-      />
-      
-      {uploading ? (
-        <p>⏳ Processing files...</p>
-      ) : (
-        <>
-          <p>📄 Drop PDF, CSV, or Excel files here</p>
-          <p className="hint">or click to browse</p>
-        </>
-      )}
-      
-      {result && (
-        <p className={result.error ? 'error' : 'success'}>
-          {result.error || `${result.count} transactions ingested`}
-        </p>
-      )}
+    <div>
+      <div
+        className={`statement-dropzone ${dragging ? 'dragging' : ''}`}
+        onDragOver={e => { e.preventDefault(); if (!busy.current) setDragging(true); }}
+        onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false); }}
+        onDrop={e => { e.preventDefault(); setDragging(false); void handleFiles(e.dataTransfer.files); }}
+        aria-busy={uploading}
+      >
+        <input ref={input} type="file" multiple accept=".pdf,.csv,.xls,.xlsx" hidden
+          disabled={uploading} onChange={e => void handleFiles(e.target.files)} aria-label="Select statement files" />
+        <button type="button" className="statement-upload-button" disabled={uploading} onClick={() => input.current?.click()}>
+          <span className="upload-symbol" aria-hidden="true">↑</span>
+          <strong>{uploading ? 'Processing your statements…' : 'Drop statements here, or browse files'}</strong>
+          <span>PDF, CSV, XLS, XLSX · Multiple files at once</span>
+        </button>
+        <p>Accounts are detected automatically. Uploading starts as soon as you choose files.</p>
+      </div>
+      <div className="upload-feedback" role="status" aria-live="polite">
+        {uploading && <p>{files.length} file{files.length === 1 ? '' : 's'}: {files.join(', ')}</p>}
+        {error && <p className="error">Upload failed: {error}</p>}
+        {result && <div className="upload-result">
+          <strong>{result.files.length} file{result.files.length === 1 ? '' : 's'} processed{result.issueCount ? ' with issues' : ''}.</strong>
+          <p>{result.itemCount} items · {result.transferCount} transfers · {result.exchangeCount} exchanges · {result.positionCount} positions · {result.realizedCount} realized</p>
+          <Link to={`/breakdown?run=${encodeURIComponent(result.runId)}`}>
+            {result.issueCount ? `Review ${result.issueCount} issue${result.issueCount === 1 ? '' : 's'} and results` : 'View results'} →
+          </Link>
+        </div>}
+      </div>
     </div>
   );
 }
