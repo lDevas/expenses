@@ -1,9 +1,55 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import { consolidate } from '../server/ingestion/consolidation.ts';
 import { DatabaseQueries } from '../server/db/queries.ts';
 import { applySchema } from '../server/db/schemaSql.ts';
-import { date, pairedStatements, setup, statement, txn } from './fixtures.ts';
+import { parsePrexXlsx } from '../server/ingestion/parsers/prexXlsx.ts';
+import { date, pairedStatements, prexWorkbook, setup, statement, txn } from './fixtures.ts';
+
+test('deletions survive repeat uploads and reconciliation upgrades without deleting identical sibling purchases', () => {
+  const { q, sql } = setup();
+  try {
+    const s = statement('bank', { transactions: [txn(), txn()] });
+    const first = consolidate([s]);
+    q.saveConsolidation(first, [s]);
+    const [removed, sibling] = q.getTransactions();
+    const history = JSON.stringify(q.getConsolidated(first.runId));
+    assert.equal(q.deleteTransaction(removed.id), true);
+    assert.deepEqual(q.getTransactions().map(t => t.id), [sibling.id]);
+    assert.deepEqual(q.getConsolidated()!.items.map(t => t.id), [sibling.id]);
+    assert.equal(JSON.stringify(q.getConsolidated(first.runId)), history);
+
+    applySchema(sql);
+    const reopened = new DatabaseQueries(sql);
+    reopened.saveConsolidation(consolidate([s]), [s]);
+    assert.deepEqual(reopened.getTransactions().map(t => t.id), [sibling.id]);
+    assert.deepEqual(reopened.getConsolidated()!.items.map(t => t.id), [sibling.id]);
+    const additional = { ...s, file: 'more.csv', transactions: [txn(), txn(), txn()] };
+    reopened.saveConsolidation(consolidate([additional]), [additional]);
+    assert.equal(reopened.getTransactions().length, 2, 'only the explicitly deleted occurrence stays removed');
+    assert.equal(reopened.getTransaction(removed.id), undefined);
+    sql.exec('UPDATE consolidation_state SET reconciliation_version = 0');
+    const upgraded = new DatabaseQueries(sql);
+    assert.equal(upgraded.getTransactions().length, 2);
+    assert.equal(upgraded.getTransaction(removed.id), undefined);
+    assert.equal(upgraded.getConsolidated()!.items.length, 2);
+    assert.equal(JSON.stringify(upgraded.getConsolidated(first.runId)), history);
+  } finally { sql.close(); }
+});
+
+test('deleted manual transactions are not restored under a new ID by a retry', () => {
+  const { q, sql } = setup();
+  try {
+    q.saveConsolidation(consolidate([statement()]), [statement()]);
+    const manual = { id: 'manual', accountId: 'bank', date: date('2026-08-01'),
+      description: 'Manual adjustment', amount: 12, currency: 'UYU', source: 'manual-entry' as const, importedAt: new Date() };
+    q.saveTransaction(manual);
+    assert.equal(q.deleteTransaction(manual.id), true);
+    q.saveTransaction({ ...manual, id: 'retried-manual' });
+    assert.equal(q.getTransactions().length, 0);
+  } finally { sql.close(); }
+});
 
 test('separate uploads reconcile to the same current state as a batch, without rewriting history', () => {
   const batch = setup(), sequential = setup();
@@ -130,5 +176,36 @@ test('source archive, current view and coverage all roll back on a failed rebuil
     assert.equal((sql.prepare('SELECT COUNT(*) n FROM statement_sources').get() as { n: number }).n, 1);
     assert.equal(q.getAccountUploadRanges().length, 1);
     assert.equal(q.getTransactions().length, 1);
+  } finally { sql.close(); }
+});
+
+test('a multi-statement Prex file saves one run, per-currency accounts, and rebuilds its report', () => {
+  const { q, sql } = setup();
+  try {
+    const buf = prexWorkbook([
+      ['Fecha', 'Descripción', 'Moneda Origen', 'Importe Origen', 'Moneda', 'Importe', 'Estado'],
+      ['14/08/2026', 'CAMBIO MONEDA DEBITO', 'USD', -848.92, 'USD', -848.92, 'Confirmado'],
+      ['14/08/2026', 'CAMBIO MONEDA CREDITO', 'UYU', 34084, 'UYU', 34084, 'Confirmado'],
+      ['05/10/2026', 'Pago de Servicios en Abitab', 'UYU', -11228, 'UYU', -11228, 'Confirmado'],
+    ]);
+    const hash = createHash('sha256').update(buf).digest('hex');
+    const stmts = parsePrexXlsx(buf, 'estado_cuenta_20261007.xlsx').map(s => ({ ...s, fileHash: hash }));
+    q.saveConsolidation(consolidate(stmts), stmts);
+
+    const runs = q.getConsolidationRuns();
+    assert.equal(runs.length, 1);
+    assert.deepEqual(runs[0].files, ['estado_cuenta_20261007.xlsx'], 'one physical file despite two statements');
+    assert.equal(runs[0].exchangeCount, 1);
+
+    // Two upload rows (one per account) still cover the single original file.
+    const report = q.getConsolidatedReport(runs[0].runId)!;
+    assert.equal(report.exchanges.length, 1);
+    assert.equal(report.exchanges[0].matchStatus, 'matched');
+
+    const prex = q.getAccountUploadRanges().filter(a => a.institutionId === 'prex');
+    assert.deepEqual(prex.map(a => a.accountId).sort(), ['prex-usd', 'prex-uyu']);
+    assert.ok(prex.every(a => a.fileCount === 1 && a.uploads.length === 1));
+    assert.equal(q.getInstitutions().find(i => i.id === 'prex')?.country, 'UY');
+    assert.equal(q.getConsolidated()!.exchanges.filter(e => e.matchStatus === 'matched').length, 1);
   } finally { sql.close(); }
 });

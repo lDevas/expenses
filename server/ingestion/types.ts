@@ -24,6 +24,7 @@ export type StatementKind =
   | 'santander-card'
   | 'ibkr-statement'
   | 'etoro-statement'
+  | 'prex-estado'
   | 'unknown';
 
 export type ParsedAccountType = 'savings' | 'checking' | 'credit' | 'investment';
@@ -75,6 +76,8 @@ export interface RawTxn {
   kind: RawTxnKind;
   reference?: string;
   counterparty?: string;
+  /** The account's running balance reported after this row (bank statements only). */
+  balanceAfter?: number;
   metadata?: Record<string, unknown>;
 }
 
@@ -196,6 +199,25 @@ export interface ConsolidatedRealized extends ParsedRealized {
   sourceFiles: string[];
 }
 
+/**
+ * A bank account's reported balance at a point in time: the opening balance,
+ * a row's running balance, or the closing balance of one statement. One account
+ * can produce several snapshots per statement; the current view keeps them all
+ * and callers merge same-day snapshots from overlapping statements.
+ */
+export interface ConsolidatedBalance {
+  id: string;
+  accountId: string;
+  accountLabel: string;
+  date: Date;
+  amount: number;
+  currency: string;
+  source: 'opening' | 'activity' | 'closing';
+  sourceFiles: string[];
+  /** Latest date of the statement this snapshot came from; newer statements win same-day conflicts. */
+  statementTo?: Date;
+}
+
 export interface ConsolidatedResult {
   runId: string;
   generatedAt: Date;
@@ -205,6 +227,7 @@ export interface ConsolidatedResult {
   exchanges: ConsolidatedExchange[];
   positions: ConsolidatedPosition[];
   realized: ConsolidatedRealized[];
+  balances: ConsolidatedBalance[];
   issues: Issue[];
 }
 

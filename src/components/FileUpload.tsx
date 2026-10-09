@@ -68,7 +68,7 @@ export default function FileUpload({ onUploadComplete }: Props) {
         {result && <div className="upload-result">
           <strong>{result.files.length} file{result.files.length === 1 ? '' : 's'} processed{result.issueCount ? ' with issues' : ''}.</strong>
           <p>{result.itemCount} items · {result.transferCount} transfers · {result.exchangeCount} exchanges · {result.positionCount} positions · {result.realizedCount} realized</p>
-          <Link to={`/breakdown?run=${encodeURIComponent(result.runId)}`}>
+          <Link to={`/ingest?run=${encodeURIComponent(result.runId)}#statement-reports`}>
             {result.issueCount ? `Review ${result.issueCount} issue${result.issueCount === 1 ? '' : 's'} and results` : 'View results'} →
           </Link>
         </div>}

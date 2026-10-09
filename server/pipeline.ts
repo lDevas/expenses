@@ -4,7 +4,7 @@ import * as path from 'path';
 import Database from 'better-sqlite3';
 import { DatabaseQueries } from './db/queries.ts';
 import { applySchema } from './db/schemaSql.ts';
-import { parseStatement } from './ingestion/parsers/index.ts';
+import { parseStatements } from './ingestion/parsers/index.ts';
 import { consolidate } from './ingestion/consolidation.ts';
 import type { ConsolidatedResult, ParsedStatement } from './ingestion/types.ts';
 
@@ -30,9 +30,12 @@ export async function runConsolidation(files: StatementFile[], db: DatabaseQueri
   const statements: ParsedStatement[] = [];
   for (const f of files) {
     const hash = computeFileHash(f.buffer);
-    const stmt = await parseStatement(f.name, f.buffer);
-    stmt.fileHash = hash;
-    statements.push(stmt);
+    // One file can yield multiple statements (a multi-currency ledger splits
+    // into one per currency); they all share the file's hash and name.
+    for (const stmt of await parseStatements(f.name, f.buffer)) {
+      stmt.fileHash = hash;
+      statements.push(stmt);
+    }
   }
   const result = consolidate(statements);
   db.saveConsolidation(result, statements);

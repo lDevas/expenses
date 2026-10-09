@@ -2,6 +2,14 @@ import type { ConsolidatedExchange, Transaction } from '../types/models';
 
 export const UNCATEGORIZED = 'Uncategorized';
 
+export type CurrencyFilterValue = '' | 'UYU' | 'USD';
+
+/** USD groups every foreign currency; UYU is the local currency. */
+export function matchesCurrencyFilter(currency: string, filter: CurrencyFilterValue): boolean {
+  if (!filter) return true;
+  return filter === 'USD' ? currency !== 'UYU' : currency === 'UYU';
+}
+
 /** Own-account movements change location/currency, not income or spending. */
 export function isFinancialTransaction(t: Pick<Transaction, 'category'>): boolean {
   return !['internal-transfer', 'card-payment', 'fx-exchange'].includes(t.category ?? '');
@@ -86,8 +94,8 @@ function buildAgg(name: string, txns: Transaction[], fx: FxInfo | null, depth = 
     perCurrency[t.currency] = (perCurrency[t.currency] ?? 0) + abs;
     const c = convertToUsd(abs, t.currency, fx);
     if (!isNaN(c)) usd += c;
-    if (depth < 2) {
-      const key = t.subcategory?.trim() || UNCATEGORIZED;
+    if (depth < 2 && t.subcategory?.trim()) {
+      const key = t.subcategory.trim();
       const list = subs.get(key);
       if (list) list.push(t);
       else subs.set(key, [t]);
@@ -103,13 +111,13 @@ function buildAgg(name: string, txns: Transaction[], fx: FxInfo | null, depth = 
 }
 
 /**
- * Groups transactions by `category` (falling back to "Uncategorized"), sums per currency,
+ * Groups transactions by user category (falling back to "Uncategorized"), sums per currency,
  * and collapses the tail into a single "Other" bucket so charts stay readable.
  */
 export function aggregateCategories(items: Transaction[], fx: FxInfo | null, topN = 10): CategoryAgg[] {
   const byCat = new Map<string, Transaction[]>();
   for (const t of items.filter(isFinancialTransaction)) {
-    const key = t.category?.trim() || UNCATEGORIZED;
+    const key = t.categoryName?.trim() || UNCATEGORIZED;
     const list = byCat.get(key);
     if (list) list.push(t);
     else byCat.set(key, [t]);
@@ -155,7 +163,7 @@ export function toChartData(slices: CategoryAgg[], fx: FxInfo | null): { items: 
   for (const s of slices) for (const c of Object.keys(s.perCurrency)) currencies.add(c);
 
   let currency: string | null = null;
-  if (fx) currency = 'USD';
+  if (fx && [...currencies].every(c => Number.isFinite(convertToUsd(1, c, fx)))) currency = 'USD';
   else if (currencies.size === 1) currency = [...currencies][0];
 
   const items = slices

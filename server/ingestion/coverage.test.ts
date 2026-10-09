@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { coverageGaps, mergeCoverage, statementCoverage } from './coverage.ts';
+import { coverageGaps, mergeCoverage, normalizeUploadRange, statementCoverage } from './coverage.ts';
 import { parseStatementDate } from './types.ts';
 import type { ParsedStatement } from './types.ts';
 
@@ -49,4 +49,55 @@ test('uses explicit statement periods even for empty statements; activity and un
   assert.deepEqual(statementCoverage(s), { from: null, to: null, basis: 'unknown' });
   s.realized.push({ accountId: 'a', symbol: 'X', date: date('2026-03-02'), realizedPl: 10, currency: 'USD' });
   assert.deepEqual(statementCoverage(s), { from: '2026-03-02', to: '2026-03-02', basis: 'activity' });
+});
+
+test('savings activity covers all of August, even with a single transaction, without changing source dates', () => {
+  const s = statement();
+  s.account.type = 'savings';
+  s.transactions = [{ accountId: 'a', date: date('2026-08-27'), description: 'Purchase', amount: -5, currency: 'USD', kind: 'purchase' }];
+  const original = structuredClone(s);
+  assert.deepEqual(statementCoverage(s), { from: '2026-08-01', to: '2026-08-31', basis: 'activity' });
+  s.transactions.push({ ...s.transactions[0], date: date('2026-08-05') });
+  assert.deepEqual(statementCoverage(s), { from: '2026-08-01', to: '2026-08-31', basis: 'activity' });
+  s.transactions.pop();
+  assert.deepEqual(s, original);
+});
+
+test('savings statement periods expand over leap days, December and multiple months', () => {
+  for (const [from, to, expectedFrom, expectedTo] of [
+    ['2024-02-05', '2024-02-20', '2024-02-01', '2024-02-29'],
+    ['2025-02-05', '2025-02-20', '2025-02-01', '2025-02-28'],
+    ['2026-12-10', '2026-12-27', '2026-12-01', '2026-12-31'],
+    ['2026-12-15', '2027-01-14', '2026-12-01', '2027-01-31'],
+    ['2026-08-15', '2026-10-14', '2026-08-01', '2026-10-31'],
+  ]) {
+    const s = statement();
+    s.account = { ...s.account, type: 'savings', periodFrom: date(from), periodTo: date(to), periodSource: 'statement' };
+    const original = structuredClone(s);
+    assert.deepEqual(statementCoverage(s), { from: expectedFrom, to: expectedTo, basis: 'statement' });
+    assert.deepEqual(s, original);
+  }
+});
+
+test('only savings coverage expands; other account types retain exact statement and activity dates', () => {
+  for (const type of ['checking', 'credit', 'investment'] as const) {
+    const s = statement();
+    s.account = { ...s.account, type, periodFrom: date('2026-08-15'), periodTo: date('2026-09-14'), periodSource: 'statement' };
+    assert.deepEqual(statementCoverage(s), { from: '2026-08-15', to: '2026-09-14', basis: 'statement' });
+    delete s.account.periodFrom;
+    delete s.account.periodTo;
+    s.transactions = [{ accountId: 'a', date: date('2026-08-27'), description: 'Purchase', amount: -5, currency: 'USD', kind: 'purchase' }];
+    assert.deepEqual(statementCoverage(s), { from: '2026-08-27', to: '2026-08-27', basis: 'activity' });
+  }
+});
+
+test('savings with no valid dates stay unknown and normalization is idempotent', () => {
+  const s = statement();
+  s.account.type = 'savings';
+  s.account.periodFrom = new Date(NaN);
+  assert.deepEqual(statementCoverage(s), { from: null, to: null, basis: 'unknown' });
+  const original = { from: '2026-08-05', to: '2026-08-27' };
+  const normalized = normalizeUploadRange(original, 'savings');
+  assert.deepEqual(normalizeUploadRange(normalized, 'savings'), normalized);
+  assert.deepEqual(original, { from: '2026-08-05', to: '2026-08-27' });
 });

@@ -97,7 +97,7 @@ export default function CategoryBreakdown({ title, tone, slices, fx }: CategoryB
             <span>{formatMoney(datum.perCurrency['UYU'] * fx.usdPerUyu, 'USD')}</span>
           </div>
         )}
-        {fx && (
+        {currency === 'USD' && (
           <div className="tt-row tt-total">
             <span>Total (USD)</span>
             <span>{formatMoney(datum.usd, 'USD')}</span>
@@ -179,7 +179,7 @@ export default function CategoryBreakdown({ title, tone, slices, fx }: CategoryB
             </>
           ) : (
             <div className="chart-fallback">
-              <p>Mixed currencies with no FX rate available — switch to the bar view to compare per-currency amounts.</p>
+              <p>Not all currencies have an FX rate available — switch to the bar view to see per-currency amounts.</p>
             </div>
           )
         ) : (
@@ -193,7 +193,7 @@ export default function CategoryBreakdown({ title, tone, slices, fx }: CategoryB
                 <Bar
                   key={c}
                   dataKey={fx && c === 'UYU' ? `${c} (converted)` : c}
-                  stackId="stack"
+                  stackId={currency ? 'stack' : undefined}
                   fill={colorForCurrency(c, i)}
                   maxBarSize={40}
                   onClick={(entry: any) => drillFromName(entry?.payload?.name ?? entry?.name)}

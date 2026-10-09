@@ -261,6 +261,7 @@ export function parseSantanderUmsatz(buffer: Buffer, filename: string): ParsedSt
       kind,
       reference: row.ref || undefined,
       counterparty,
+      balanceAfter: saldo ?? undefined,
       metadata: { raw: row },
     });
   }
@@ -279,8 +280,10 @@ export function parseSantanderUmsatz(buffer: Buffer, filename: string): ParsedSt
 }
 
 /** Classify a Santander concepto/descripción into a semantic kind + counterparty. */
-export function classifySantanderConcept(description: string, _amount: number): [RawTxnKind, string | undefined] {
+export function classifySantanderConcept(description: string, amount: number): [RawTxnKind, string | undefined] {
   const upper = description.toUpperCase();
+  const combined = upper.match(/TRASPASO CON LA CUENTA N\.?\s*([\d .-]+)/);
+  if (combined) return [amount < 0 ? 'transfer-out' : 'transfer-in', combined[1].trim()];
   if (/PCAMBIO/i.test(upper)) return ['fx', undefined];
   if (/CAMBIO|CAMBIA/i.test(upper)) return ['fx', undefined];
   if (/PAGO ELECTRONICO TARJETA|PAGO.*TARJETA CREDITO/i.test(upper)) return ['card-payment', 'Visa Santander'];
@@ -302,6 +305,14 @@ export function classifySantanderConcept(description: string, _amount: number): 
 
 /** Pull the trailing counterparty name out of a Santander description, if there is one. */
 function extractName(upper: string): string | undefined {
+  const plaza = upper.match(/TRF\.\s*PLAZA\s*[-:]?\s*(.+)$/);
+  if (plaza) return plaza[1].trim();
+  const digital = upper.match(/(?:CREDITO|DEBITO) OPERACION EN BANCA DIGITAL\s+[^/]*\/(.+)$/);
+  if (digital) return digital[1].trim();
+  const account = upper.match(/(?:CUENTA|CTA\.?|ACCOUNT)\s*(?:N(?:RO)?\.?\s*)?([\d .-]{5,})/);
+  if (account) return account[1].trim();
+  const received = upper.match(/(?:TT RECIBIDA|LR:[^\s]+)\s+\/?(.+)$/);
+  if (received) return received[1].trim();
   const m = upper.match(/(?:RECIBIDA|ENVIADA|TRF\. PLAZA|RECIBIDA|CREDITO OPERACION EN BANCA DIGITAL)\s+[^A-Z]*([A-Z][A-Z. ]{3,})/);
   if (m) {
     const name = m[1].trim().replace(/\s{2,}/g, ' ');

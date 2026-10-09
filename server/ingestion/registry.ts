@@ -20,15 +20,13 @@ export interface RegistryAccount {
 }
 
 /**
- * Own-account numbers (confirmed by the owner). A transfer whose counterparty is one of
- * these is an *internal* transfer, never an expense — even when the counter file is absent.
+ * Known owned bank accounts. Being another Itaú account (including iLink) is not
+ * ownership evidence. Only these or accounts discovered in statement headers can
+ * identify numeric counterparties as owned when their statement is absent.
  */
 export const OWN_ACCOUNT_NUMBERS = [
   '3142914', // Itau UYU savings
   '3142920', // Itau USD savings
-  '0425741', // Itau (iLink)
-  '4674630', // Itau (iLink)
-  '1449919', // Itau (iLink)
   '005200910615', // Santander USD
   '001200769690', // Santander UYU
 ];
@@ -49,6 +47,7 @@ const STATIC: RegistryAccount[] = [
 
 export class AccountRegistry {
   private accounts = new Map<string, RegistryAccount>();
+  private holders = new Set<string>();
 
   constructor() {
     for (const a of STATIC) this.accounts.set(a.id, a);
@@ -63,6 +62,7 @@ export class AccountRegistry {
   }
 
   merge(acc: ParsedAccount): void {
+    if (acc.holder) this.holders.add(acc.holder);
     const existing = this.accounts.get(acc.id);
     const currencies = new Set<string>(acc.currency ? [acc.currency] : []);
     if (existing) {
@@ -106,11 +106,40 @@ export class AccountRegistry {
   label(id: string): string {
     return this.accounts.get(id)?.label ?? id;
   }
+
+  /** Bank account identifiers are authoritative; never use a memo as owner evidence. */
+  counterpartyAccount(counterparty: string | undefined): RegistryAccount | undefined {
+    if (!counterparty) return undefined;
+    return this.all().find(a => !a.isCard && a.number && accountNumberMatches(counterparty, a.number));
+  }
+
+  isOwnCounterparty(counterparty: string | undefined): boolean {
+    if (!counterparty) return false;
+    if (this.counterpartyAccount(counterparty) || isOwnAccountNumber(counterparty)) return true;
+    // An explicit, unknown account number must not be overridden by a name.
+    if (/\d{5,}/.test(counterparty)) return false;
+    const words = nameWords(counterparty);
+    return words.length >= 2 && [...this.holders].some(holder => {
+      const owner = nameWords(holder);
+      return words.every(word => owner.includes(word));
+    });
+  }
+}
+
+function nameWords(value: string): string[] {
+  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase()
+    .split(/[^A-Z]+/).filter(word => word.length > 1);
+}
+
+/** Match complete numeric tokens, allowing separators and omitted leading zeroes. */
+export function accountNumberMatches(value: string, number: string): boolean {
+  if (!/^\d{5,}$/.test(number.replace(/[\s.-]/g, ''))) return false;
+  const normalize = (s: string) => s.replace(/\D/g, '').replace(/^0+/, '');
+  const target = normalize(number);
+  return (value.match(/\d(?:[\d .-]*\d)?/g) ?? []).some(token => normalize(token) === target);
 }
 
 export function isOwnAccountNumber(counterparty: string | undefined): boolean {
   if (!counterparty) return false;
-  const digits = counterparty.replace(/[^\d]/g, '');
-  if (!digits) return false;
-  return OWN_ACCOUNT_NUMBERS.some((n) => digits === n || counterparty.toUpperCase().includes(n));
+  return OWN_ACCOUNT_NUMBERS.some(n => accountNumberMatches(counterparty, n));
 }

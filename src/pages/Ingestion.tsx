@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import FileUpload from '../components/FileUpload';
+import StatementReports from '../components/StatementReports';
 import { apiFetch } from '../lib/api';
 import type { AccountUploadCoverage, ConsolidationRunSummary } from '../types/models';
 
@@ -12,7 +13,7 @@ const today = () => {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 };
-const runLink = (id: string) => `/breakdown?run=${encodeURIComponent(id)}`;
+const runLink = (id: string) => `/ingest?run=${encodeURIComponent(id)}#statement-reports`;
 
 function CoverageAccount({ account, start, end }: { account: AccountUploadCoverage; start: string; end: string }) {
   const total = dateMs(end) - dateMs(start) + DAY;
@@ -50,7 +51,9 @@ function CoverageAccount({ account, start, end }: { account: AccountUploadCovera
         <span>Last upload: {uploadedAt(account.lastUploadAt)}</span>
         {account.latestRunId && <Link to={runLink(account.latestRunId)}>Latest run ↗</Link>}
       </div>
-      {account.hasInferredCoverage && <p className="coverage-note">Some ranges use activity dates, not a full statement period. Gaps may reflect days with no activity.</p>}
+      {account.accountType === 'savings' && account.ranges.length > 0
+        ? <p className="coverage-note">Savings uploads cover full calendar months, including days with no activity.</p>
+        : account.hasInferredCoverage && <p className="coverage-note">Some ranges use activity dates, not a full statement period. Gaps may reflect days with no activity.</p>}
       {account.gaps.length > 0 && <ul className="coverage-gap-list">
         {account.gaps.map(g => <li key={g.from}>
           <strong>{g.kind === 'trailing' ? 'Needs updating' : 'Possible missing period'}:</strong> {date(g.from)} – {date(g.to)} <span className="muted">({g.days} days)</span>
@@ -64,7 +67,7 @@ function CoverageAccount({ account, start, end }: { account: AccountUploadCovera
           <tbody>{account.uploads.map((file, i) => <tr key={`${file.runId}:${i}`}>
             <td className="ellipsize" title={file.file ?? ''}>{file.file ?? 'Older upload (file not recorded)'}</td>
             <td>{file.from ? `${date(file.from)} – ${date(file.to)}` : 'Dates unavailable'}</td>
-            <td>{file.basis === 'statement' ? 'Statement period' : file.basis === 'unknown' ? 'Unknown' : 'Activity dates'}</td>
+            <td>{account.accountType === 'savings' && file.from && file.to ? 'Full calendar months' : file.basis === 'statement' ? 'Statement period' : file.basis === 'unknown' ? 'Unknown' : 'Activity dates'}</td>
             <td>{uploadedAt(file.uploadedAt)}</td><td><Link to={runLink(file.runId)}>{file.runId.slice(0, 8)} ↗</Link></td>
           </tr>)}</tbody>
         </table></div>
@@ -79,6 +82,7 @@ export default function Ingestion() {
   const [loading, setLoading] = useState(true);
   const [timelineView, setTimelineView] = useState<'recent' | 'all'>('recent');
   const [error, setError] = useState<string | null>(null);
+  const [reportVersion, setReportVersion] = useState(0);
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -107,13 +111,14 @@ export default function Ingestion() {
   return (
     <div className="ingestion-page">
       <header className="ingestion-header"><h1>Ingestion</h1><p>Upload statements. See what’s covered and what still needs updating.</p></header>
-      <FileUpload onUploadComplete={load} />
+      <FileUpload onUploadComplete={async () => { await load(); setReportVersion(version => version + 1); }} />
+      <StatementReports refreshKey={reportVersion} />
       {error && <div className="history-error" role="alert"><p className="error">{error}</p><button className="btn" onClick={() => void load()} disabled={loading}>Retry</button></div>}
       {loading && <p role="status">Loading coverage and run history…</p>}
       {!error && <>
         <section aria-labelledby="coverage-heading">
           <div className="ingestion-section-heading"><h2 id="coverage-heading">Upload coverage</h2><span>{accounts.length} accounts · {withGaps} with possible gaps</span></div>
-          <p className="coverage-explanation">Each bar shows one account’s uploaded date ranges. Gaps between uploads are flagged; accounts over 30 days behind today need updating.</p>
+          <p className="coverage-explanation">Each bar shows one account’s uploaded date ranges. Savings uploads cover full calendar months; other accounts use statement periods or activity dates. Gaps between uploads are flagged; accounts over 30 days behind today need updating.</p>
           {accounts.length ? <>
             <div className="timeline-controls">
               <label htmlFor="timeline-view">Timeline</label>

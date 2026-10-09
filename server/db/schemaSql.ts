@@ -6,6 +6,38 @@ import type { Database as DatabaseType } from 'better-sqlite3';
  * transactions.run_id column were added for it.)
  */
 export const SCHEMA_SQL = `
+    CREATE TABLE IF NOT EXISTS user_categories (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL COLLATE NOCASE,
+      direction TEXT NOT NULL CHECK(direction IN ('expense', 'income')),
+      UNIQUE(name, direction)
+    );
+    CREATE TABLE IF NOT EXISTS category_rules (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      category_id TEXT NOT NULL REFERENCES user_categories(id),
+      pattern TEXT NOT NULL,
+      accounting_type TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      position INTEGER NOT NULL
+    );
+    -- Reconciliation replaces transaction rows. Overrides must survive that rebuild.
+    CREATE TABLE IF NOT EXISTS transaction_category_overrides (
+      transaction_id TEXT PRIMARY KEY,
+      category_id TEXT REFERENCES user_categories(id)
+    );
+    -- Keep explicit deletions when statement uploads rebuild transaction rows.
+    CREATE TABLE IF NOT EXISTS transaction_deletions (
+      transaction_id TEXT PRIMARY KEY,
+      content_hash TEXT,
+      deleted_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_transaction_deletions_hash ON transaction_deletions(content_hash);
+    CREATE TABLE IF NOT EXISTS category_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS institutions (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -187,7 +219,8 @@ export const SCHEMA_SQL = `
 
     CREATE TABLE IF NOT EXISTS consolidation_state (
       id INTEGER PRIMARY KEY CHECK (id = 1),
-      result_json TEXT NOT NULL
+      result_json TEXT NOT NULL,
+      reconciliation_version INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS consolidation_issues (
@@ -232,6 +265,7 @@ export function applySchema(db: DatabaseType): void {
   const hasResult = (db.prepare(`SELECT COUNT(*) AS n FROM pragma_table_info('consolidation_runs') WHERE name = 'result_json'`).get() as { n: number }).n;
   if (!hasResult) db.exec('ALTER TABLE consolidation_runs ADD COLUMN result_json TEXT');
   const columns = (table: string) => new Set((db.prepare(`SELECT name FROM pragma_table_info('${table}')`).all() as { name: string }[]).map(c => c.name));
+  if (!columns('consolidation_state').has('reconciliation_version')) db.exec('ALTER TABLE consolidation_state ADD COLUMN reconciliation_version INTEGER NOT NULL DEFAULT 0');
   if (!columns('transactions').has('reconciled')) db.exec('ALTER TABLE transactions ADD COLUMN reconciled INTEGER NOT NULL DEFAULT 0');
   // Existing balances were previously persisted without a validity flag.
   if (!columns('accounts').has('balance_known')) db.exec('ALTER TABLE accounts ADD COLUMN balance_known INTEGER NOT NULL DEFAULT 1');

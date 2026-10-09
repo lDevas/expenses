@@ -64,7 +64,9 @@ export function parseIbkrCsv(buffer: Buffer, filename: string): ParsedStatement 
       sec = { headers: [], rows: [] };
       sections.set(section, sec);
     }
-    if (role === 'Header') sec.headers = values;
+    // IBKR appends a one-column performance subtable in the NAV section. It
+    // must not overwrite the cash/stock table's column headers above it.
+    if (role === 'Header' && !(section === 'Net Asset Value' && !values.includes('Current Total'))) sec.headers = values;
     else if (role === 'Data') sec.rows.push(values);
   }
 
