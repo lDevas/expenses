@@ -22,6 +22,7 @@ import {
  *                               the account's currency (USD) — i.e. the second amount.
  * In every two-amount case the right-most column is the USD the card bills, so we use it.
  * `PAGOS` lines are payments into the card (negative on the statement); one raw txn per currency.
+ * Both currency amounts are valid payments, not a parsing issue.
  * `REDUC. IVA LEY 17934` lines are tax credits, netted against their purchase by consolidation.
  */
 export async function parseItauCardPdf(buffer: Buffer, filename: string): Promise<ParsedStatement> {
@@ -112,10 +113,6 @@ export async function parseItauCardPdf(buffer: Buffer, filename: string): Promis
       issues.push({ file: filename, row: i + 1, field: 'Importe', raw: line, severity: 'warning', message: 'Could not parse amount — line skipped' });
       continue;
     }
-    if (isPagos && a2 !== null && a2 !== 0) {
-      issues.push({ file: filename, row: i + 1, field: 'Importe', raw: line, severity: 'info', message: 'Dual-currency payment split into UYU + USD rows' });
-    }
-
     const merchantUpper = merchant.toUpperCase();
     const isReduc = merchantUpper.includes('REDUC. IVA');
 

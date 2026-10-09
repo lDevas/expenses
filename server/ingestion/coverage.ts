@@ -1,4 +1,4 @@
-import type { AccountUploadCoverage, UploadDateRange } from '../../src/types/models.ts';
+import type { AccountType, AccountUploadCoverage, UploadDateRange } from '../../src/types/models.ts';
 import { toISODate } from './types.ts';
 import type { ParsedStatement } from './types.ts';
 
@@ -7,6 +7,14 @@ export const STALE_AFTER_DAYS = 30;
 const day = (value: string) => Date.parse(`${value}T00:00:00Z`);
 const shift = (value: string, days: number) => new Date(day(value) + days * DAY_MS).toISOString().slice(0, 10);
 
+/** Savings exports cover full calendar months, including days without activity. */
+export function normalizeUploadRange(range: UploadDateRange, accountType: AccountType): UploadDateRange {
+  if (accountType !== 'savings') return range;
+  const monthEnd = new Date(day(`${range.to.slice(0, 7)}-01`));
+  monthEnd.setUTCMonth(monthEnd.getUTCMonth() + 1, 0);
+  return { from: `${range.from.slice(0, 7)}-01`, to: monthEnd.toISOString().slice(0, 10) };
+}
+
 export function statementCoverage(statement: ParsedStatement): {
   from: string | null; to: string | null; basis: 'statement' | 'activity' | 'unknown';
 } {
@@ -14,7 +22,7 @@ export function statementCoverage(statement: ParsedStatement): {
   const { account } = statement;
   if (valid(account.periodFrom) && valid(account.periodTo) && account.periodFrom <= account.periodTo) {
     return {
-      from: toISODate(account.periodFrom), to: toISODate(account.periodTo),
+      ...normalizeUploadRange({ from: toISODate(account.periodFrom), to: toISODate(account.periodTo) }, account.type),
       basis: account.periodSource === 'statement' ? 'statement' : 'activity',
     };
   }
@@ -23,7 +31,7 @@ export function statementCoverage(statement: ParsedStatement): {
     ...statement.realized.map(r => r.date),
     ...statement.positions.map(p => p.snapshotDate),
   ].filter(valid).map(toISODate).sort();
-  return dates.length ? { from: dates[0], to: dates[dates.length - 1], basis: 'activity' }
+  return dates.length ? { ...normalizeUploadRange({ from: dates[0], to: dates[dates.length - 1] }, account.type), basis: 'activity' }
     : { from: null, to: null, basis: 'unknown' };
 }
 

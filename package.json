@@ -8,11 +8,17 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "server": "node --experimental-strip-types server/start.ts",
+    "server": "node --watch --experimental-strip-types server/start.ts",
     "reset-db": "node --experimental-strip-types server/reset-db.ts",
     "run": "concurrently -n api,web -c blue,green \"npm run server\" \"npm run dev -- --port ${CONDUCTOR_PORT:-5173}\"",
     "test": "node --experimental-strip-types --test server/ingestion/coverage.test.ts server/db/coverage.test.ts tests/*.test.ts",
-    "test:browser": "node --experimental-strip-types tests/ui.browser.ts"
+    "test:browser": "node --experimental-strip-types tests/ui.browser.ts",
+    "test:browser:coverage": "node --experimental-strip-types tests/upload-coverage.browser.ts",
+    "test:browser:details": "node --experimental-strip-types tests/details.browser.ts",
+    "test:browser:currency": "node --experimental-strip-types tests/currency-filter.browser.ts",
+    "test:browser:categories": "node --experimental-strip-types tests/categories.browser.ts",
+    "test:browser:investments": "node --experimental-strip-types tests/investments.browser.ts",
+    "test:browser:networth": "node --experimental-strip-types tests/net-worth.browser.ts"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.1",
@@ -24,6 +30,7 @@
     "pdf-parse": "^2.4.5",
     "puppeteer": "^25.9.0",
     "react": "^19.2.8",
+    "react-day-picker": "^9.14.0",
     "react-dom": "^19.2.8",
     "react-router-dom": "^7.18.3",
     "recharts": "^3.10.1",

@@ -153,6 +153,7 @@ export function parseItauEstado(buffer: Buffer, filename: string): ParsedStateme
       kind,
       reference: referencia || undefined,
       counterparty,
+      balanceAfter: parseAmount(c('Saldo')) ?? undefined,
       metadata: { raw: { fecha: dateStr, concepto: fullConcept, debito: c('Débito'), credito: c('Crédito'), saldo: c('Saldo'), referencia, destino } },
     };
     result.transactions.push(txn);
@@ -172,6 +173,11 @@ export function parseItauEstado(buffer: Buffer, filename: string): ParsedStateme
 export function classifyItauConcept(concept: string, referencia: string, _destino: string): [RawTxnKind, string | undefined] {
   const c = concept.trim();
   const upper = c.toUpperCase();
+
+  if (/^(?:DEB|CRE)\.\s*CAMBIOSCOM\./i.test(upper)) return ['fee', undefined];
+  // ST debits and OP credits are interbank wires, not currency conversions.
+  if (/^DEB\.\s*CAMBIOSST/i.test(upper)) return ['transfer-out', undefined];
+  if (/^CRE\.\s*CAMBIOSOP/i.test(upper)) return ['transfer-in', undefined];
 
   const traspaso = upper.match(/TRASPASO\s+(A|DE)\s+([0-9]{5,})/i);
   if (traspaso) {

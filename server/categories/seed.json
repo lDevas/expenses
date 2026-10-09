@@ -1,0 +1,568 @@
+{
+  "categories": [
+    {
+      "id": "expense-bank-fees-interest",
+      "name": "Bank fees & interest",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-taxes",
+      "name": "Taxes",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-electricity",
+      "name": "Electricity",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-internet-phone",
+      "name": "Internet & phone",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-pension-contributions",
+      "name": "Pension contributions",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-housing",
+      "name": "Housing",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-accountant",
+      "name": "Accountant",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-health-insurance",
+      "name": "Health insurance",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-pharmacy",
+      "name": "Pharmacy",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-groceries",
+      "name": "Groceries",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-delivery-tips",
+      "name": "Delivery tips",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-delivery-fees",
+      "name": "Delivery fees",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-delivery-subscription",
+      "name": "Delivery subscription",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-food-delivery",
+      "name": "Food delivery",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-caf-s",
+      "name": "Cafés",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-bars-drinks",
+      "name": "Bars & drinks",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-restaurants",
+      "name": "Restaurants",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-transport",
+      "name": "Transport",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-fuel",
+      "name": "Fuel",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-travel",
+      "name": "Travel",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-clothing",
+      "name": "Clothing",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-gaming-hobbies",
+      "name": "Gaming & hobbies",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-entertainment-events",
+      "name": "Entertainment & events",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-software-subscriptions",
+      "name": "Software & subscriptions",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-fitness",
+      "name": "Fitness",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-electronics",
+      "name": "Electronics",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-home-furnishings",
+      "name": "Home & furnishings",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-pets",
+      "name": "Pets",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-household-help",
+      "name": "Household help",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-shipping",
+      "name": "Shipping",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-cash-withdrawals",
+      "name": "Cash withdrawals",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-shopping",
+      "name": "Shopping",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-outgoing-transfers",
+      "name": "Outgoing transfers",
+      "direction": "expense"
+    },
+    {
+      "id": "expense-bank-debits",
+      "name": "Bank debits",
+      "direction": "expense"
+    },
+    {
+      "id": "income-salary",
+      "name": "Salary",
+      "direction": "income"
+    },
+    {
+      "id": "income-pensions",
+      "name": "Pensions",
+      "direction": "income"
+    },
+    {
+      "id": "income-dividends",
+      "name": "Dividends",
+      "direction": "income"
+    },
+    {
+      "id": "income-interest",
+      "name": "Interest",
+      "direction": "income"
+    },
+    {
+      "id": "income-refunds",
+      "name": "Refunds",
+      "direction": "income"
+    },
+    {
+      "id": "income-reimbursements",
+      "name": "Reimbursements",
+      "direction": "income"
+    },
+    {
+      "id": "income-incoming-transfers",
+      "name": "Incoming transfers",
+      "direction": "income"
+    },
+    {
+      "id": "income-bank-credits",
+      "name": "Bank credits",
+      "direction": "income"
+    }
+  ],
+  "rules": [
+    {
+      "id": "seed-accounting-fee",
+      "name": "Reported fees",
+      "categoryId": "expense-bank-fees-interest",
+      "pattern": ".*",
+      "accountingType": "fee",
+      "enabled": true
+    },
+    {
+      "id": "seed-accounting-tax",
+      "name": "Reported taxes",
+      "categoryId": "expense-taxes",
+      "pattern": ".*",
+      "accountingType": "tax",
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-taxes",
+      "name": "Taxes",
+      "categoryId": "expense-taxes",
+      "pattern": "(?<![A-Z])I[.\\s]*V[.\\s]*A(?:\\.|\\b)",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-bank-fees-interest",
+      "name": "Bank fees & interest",
+      "categoryId": "expense-bank-fees-interest",
+      "pattern": "COMISION|CAMBIOSCOM|ENVIO ESTADO|DEBITO PAQUETE|CUOTA ANUAL|INTERESES FINANCIEROS|MULTA POR MORA|COBRO TARJETA|SEGURO.*(SALDO|SDO)",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-electricity",
+      "name": "Electricity",
+      "categoryId": "expense-electricity",
+      "pattern": "(^|[^A-Z])UTE(?=[0-9\\s]|$)",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-internet-phone",
+      "name": "Internet & phone",
+      "categoryId": "expense-internet-phone",
+      "pattern": "ANTEL|MOVISTAR|MVST|MVDCOMM",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-pension-contributions",
+      "name": "Pension contributions",
+      "categoryId": "expense-pension-contributions",
+      "pattern": "CJPPU",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-housing",
+      "name": "Housing",
+      "categoryId": "expense-housing",
+      "pattern": "NICOLAS MONTENEGRO|ADMINISTRACIONES PUERTA DEL S",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-accountant",
+      "name": "Accountant",
+      "categoryId": "expense-accountant",
+      "pattern": "EAC LTDA",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-health-insurance",
+      "name": "Health insurance",
+      "categoryId": "expense-health-insurance",
+      "pattern": "SUMMUM",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-pharmacy",
+      "name": "Pharmacy",
+      "categoryId": "expense-pharmacy",
+      "pattern": "FARMACIA|FARMASHOP|FARMACITY|CLONAZEP",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-groceries",
+      "name": "Groceries",
+      "categoryId": "expense-groceries",
+      "pattern": "PEDIDOS\\s*YA.*MARKET|DISCO N|GREEN POINT|MORA FRUT|MERCADITO RIVERA|LOS BALDOMIR|BUENA VIDA ALMACEN N|NATAL|SUPER COMPACT|KINKO|ALL\\s*NATURAL|\\bFROG\\b|MAR AUSTRAL",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-delivery-tips",
+      "name": "Delivery tips",
+      "categoryId": "expense-delivery-tips",
+      "pattern": "PEDIDOS\\s*YA.*(PROPIN|\\bPR$)",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-delivery-fees",
+      "name": "Delivery fees",
+      "categoryId": "expense-delivery-fees",
+      "pattern": "PEDIDOS\\s*YA.*(ENVIO|\\bEN$)",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-delivery-subscription",
+      "name": "Delivery subscription",
+      "categoryId": "expense-delivery-subscription",
+      "pattern": "PEDIDOS\\s*YA.*PLUS(?! FOOD)",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-food-delivery",
+      "name": "Food delivery",
+      "categoryId": "expense-food-delivery",
+      "pattern": "PEDIDOS\\s*YA",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-caf-s",
+      "name": "Cafés",
+      "categoryId": "expense-caf-s",
+      "pattern": "CAFE|CAFETERIA|SEIS\\s*MONT|STARBUCKS|TIENDA DEL TE|TEMPLO TOSTAD|GRANO SUBTERRANEO|SSKAFFE",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-bars-drinks",
+      "name": "Bars & drinks",
+      "categoryId": "expense-bars-drinks",
+      "pattern": "MONTEVIDEO BEER|\\bMBC\\b|BEER|NEGRONI|IBERPARK|DE GUARDA|MORETTIGINBA|RENZO SCUADRONI VINOS",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-restaurants",
+      "name": "Restaurants",
+      "categoryId": "expense-restaurants",
+      "pattern": "\\bUMAR[I]?\\b|ADELA|TANDEMUR|ONE LOVE|FOOD N LOVE|NUDO ESCUDO|DON ANTONIO|CULTO|LA MILPA|LA GIRALDITA|REST DALI|TSUBO|ATIPICO|FLORA|NOODLETOWN|SUFPASTELERI|OBRADOR SOCIAL|MANTEQUILLA",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-transport",
+      "name": "Transport",
+      "categoryId": "expense-transport",
+      "pattern": "UBER|CABIFY|CPATU|\\bSENDA\\b",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-fuel",
+      "name": "Fuel",
+      "categoryId": "expense-fuel",
+      "pattern": "ANCAP",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-travel",
+      "name": "Travel",
+      "categoryId": "expense-travel",
+      "pattern": "AIRBNB|BUQUEBUS|LATAM|FREESHOP",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-clothing",
+      "name": "Clothing",
+      "categoryId": "expense-clothing",
+      "pattern": "LEVIS|LEGACY|\\bH&M\\b|\\bH M\\b|HERING|NIKE|UNDER ARMOUR|DECATHLON|AUGEDEPORTES|BUBBA",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-gaming-hobbies",
+      "name": "Gaming & hobbies",
+      "categoryId": "expense-gaming-hobbies",
+      "pattern": "INGRESS|ENIGMA\\s*GAMES|MAGICCON|STEAM|CULTS3D|CASA DEL ARTESANO|TCARTONES|BOOSTER BOX",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-entertainment-events",
+      "name": "Entertainment & events",
+      "categoryId": "expense-entertainment-events",
+      "pattern": "YOUTUBE|SPOTIFY|TICKETMASTER|REDTICKET|TUENTRADA|ENTRASTE|CINEPOLIS|\\bMOVIE\\b",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-software-subscriptions",
+      "name": "Software & subscriptions",
+      "categoryId": "expense-software-subscriptions",
+      "pattern": "OPENAI|GOOGLE ONE|NORDVPN|MONY BUDGET|SPLITWISE|TINDER|BUMBLE",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-fitness",
+      "name": "Fitness",
+      "categoryId": "expense-fitness",
+      "pattern": "WIKIMUSCULOS",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-electronics",
+      "name": "Electronics",
+      "categoryId": "expense-electronics",
+      "pattern": "MACROTEC|SAMSUNG|NSTORE|TECSYS|MIURUGUAY|SILVERLED",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-home-furnishings",
+      "name": "Home & furnishings",
+      "categoryId": "expense-home-furnishings",
+      "pattern": "FERRETERIA|BAZAR DEL COCINERO|ESTACIONHOGAR|CASA SIMON|CONFORT|DIVINO",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-pets",
+      "name": "Pets",
+      "categoryId": "expense-pets",
+      "pattern": "MUNDOCANINO",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-household-help",
+      "name": "Household help",
+      "categoryId": "expense-household-help",
+      "pattern": "PAGO SUELDOS TKAREN|\\bTKAREN\\b",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-shipping",
+      "name": "Shipping",
+      "categoryId": "expense-shipping",
+      "pattern": "ENCOMIENDAS",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-cash-withdrawals",
+      "name": "Cash withdrawals",
+      "categoryId": "expense-cash-withdrawals",
+      "pattern": "\\bRETIRO\\b",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-shopping",
+      "name": "Shopping",
+      "categoryId": "expense-shopping",
+      "pattern": "MERCADOLIBRE|VTOLVENTAS ONL|MERPAGO|LE BLANC|MONOBLOCK",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-outgoing-transfers",
+      "name": "Outgoing transfers",
+      "categoryId": "expense-outgoing-transfers",
+      "pattern": "TRASPASO A|TRANSF.*ENVIADA|TRF\\. PLAZA|\\bTJULIAN\\b",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-expense-bank-debits",
+      "name": "Bank debits",
+      "categoryId": "expense-bank-debits",
+      "pattern": "DEB\\. CAMBIOSST",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-income-salary",
+      "name": "Salary",
+      "categoryId": "income-salary",
+      "pattern": "REMOTELY WORKS",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-income-pensions",
+      "name": "Pensions",
+      "categoryId": "income-pensions",
+      "pattern": "JUBILACIONES|PENSIONES",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-income-dividends",
+      "name": "Dividends",
+      "categoryId": "income-dividends",
+      "pattern": "^DIVIDEND",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-income-interest",
+      "name": "Interest",
+      "categoryId": "income-interest",
+      "pattern": "INTEREST",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-income-refunds",
+      "name": "Refunds",
+      "categoryId": "income-refunds",
+      "pattern": "AJUSTE|RECH",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-income-reimbursements",
+      "name": "Reimbursements",
+      "categoryId": "income-reimbursements",
+      "pattern": "DEUDA|JUNTADA|PIZZA TIME|POR COMERLA|BOOSTER BOX",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-income-incoming-transfers",
+      "name": "Incoming transfers",
+      "categoryId": "income-incoming-transfers",
+      "pattern": "TRANSF.*RECIBIDA|TRASPASO DE|CREDITO OPERACION",
+      "accountingType": null,
+      "enabled": true
+    },
+    {
+      "id": "seed-income-bank-credits",
+      "name": "Bank credits",
+      "categoryId": "income-bank-credits",
+      "pattern": "CRE\\. CAMBIOS",
+      "accountingType": null,
+      "enabled": true
+    }
+  ]
+}

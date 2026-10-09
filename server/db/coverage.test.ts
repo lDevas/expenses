@@ -155,3 +155,125 @@ test('stores empty statement periods and undated uploads without inventing cover
     assert.deepEqual(coverage[1].gaps, []);
   } finally { db.close(); }
 });
+
+test('savings coverage persists full months, merges adjacent months and preserves missing months and the grace period', () => {
+  const { db, queries } = setup();
+  try {
+    const august = statement('savings', '2026-08-05', '2026-08-27', 'august');
+    august.account.type = 'savings';
+    august.account.periodSource = 'activity';
+    queries.saveConsolidation(consolidate([august]), [august]);
+    let coverage = queries.getAccountUploadRanges('2026-09-30')[0];
+    assert.equal(coverage.accountType, 'savings');
+    assert.equal(coverage.minDate, '2026-08-01');
+    assert.equal(coverage.maxDate, '2026-08-31');
+    assert.equal(coverage.uploads[0].basis, 'activity');
+    assert.deepEqual(coverage.gaps, []); // Exactly 30 days after month-end.
+    assert.deepEqual(queries.getAccountUploadRanges('2026-10-01')[0].gaps,
+      [{ from: '2026-09-01', to: '2026-10-01', days: 31, kind: 'trailing' }]);
+    assert.deepEqual(db.prepare('SELECT min_date, max_date FROM account_upload_files').get(),
+      { min_date: '2026-08-01', max_date: '2026-08-31' });
+
+    const october = statement('savings', '2026-10-10', '2026-10-20', 'october');
+    october.account.type = 'savings';
+    queries.saveConsolidation(consolidate([october]), [october]);
+    coverage = queries.getAccountUploadRanges('2026-10-21')[0];
+    assert.deepEqual(coverage.gaps, [{ from: '2026-09-01', to: '2026-09-30', days: 30, kind: 'internal' }]);
+
+    const september = statement('savings', '2026-09-08', '2026-09-18', 'september');
+    september.account.type = 'savings';
+    queries.saveConsolidation(consolidate([september]), [september]);
+    coverage = queries.getAccountUploadRanges('2026-10-21')[0];
+    assert.deepEqual(coverage.ranges, [{ from: '2026-08-01', to: '2026-10-31' }]);
+    assert.deepEqual(coverage.gaps, []);
+    assert.deepEqual(coverage.uploads.map(file => [file.from, file.to]), [
+      ['2026-09-01', '2026-09-30'], ['2026-10-01', '2026-10-31'], ['2026-08-01', '2026-08-31'],
+    ]);
+  } finally { db.close(); }
+});
+
+test('normalizes existing savings files on read without rewriting stored coverage or financial history', () => {
+  const { db, queries } = setup();
+  try {
+    const savings = statement('savings', '2026-08-27', '2026-08-27', 'savings');
+    savings.account.type = 'savings';
+    savings.account.closingBalance = 123;
+    savings.account.balanceDate = date('2026-08-27');
+    const credit = statement('credit', '2026-08-15', '2026-09-14', 'credit');
+    credit.account.type = 'credit';
+    const result = consolidate([savings, credit]);
+    queries.saveConsolidation(result, [savings, credit]);
+    // Recreate coverage saved by the previous version of ingestion.
+    db.prepare("UPDATE account_upload_files SET min_date = '2026-08-27', max_date = '2026-08-27', basis = 'activity' WHERE account_id = 'savings'").run();
+    const before = {
+      files: db.prepare('SELECT * FROM account_upload_files ORDER BY id').all(),
+      transactions: queries.getTransactions(),
+      accounts: db.prepare('SELECT * FROM accounts ORDER BY id').all(),
+      history: queries.getConsolidated(result.runId),
+    };
+    const coverage = queries.getAccountUploadRanges('2026-09-01');
+    const normalized = coverage.find(account => account.accountId === 'savings')!;
+    assert.deepEqual(normalized.ranges, [{ from: '2026-08-01', to: '2026-08-31' }]);
+    assert.equal(normalized.uploads[0].from, '2026-08-01');
+    assert.equal(normalized.uploads[0].to, '2026-08-31');
+    assert.equal(normalized.uploads[0].basis, 'activity');
+    const unchanged = coverage.find(account => account.accountId === 'credit')!;
+    assert.equal(unchanged.accountType, 'credit');
+    assert.deepEqual(unchanged.ranges, [{ from: '2026-08-15', to: '2026-09-14' }]);
+    assert.deepEqual({
+      files: db.prepare('SELECT * FROM account_upload_files ORDER BY id').all(),
+      transactions: queries.getTransactions(),
+      accounts: db.prepare('SELECT * FROM accounts ORDER BY id').all(),
+      history: queries.getConsolidated(result.runId),
+    }, before);
+  } finally { db.close(); }
+});
+
+test('legacy savings activity shows full months without fabricating filenames or changing recorded activity', () => {
+  const { db, queries } = setup();
+  try {
+    const savings = statement('savings', '2026-08-27', '2026-08-27', 'legacy');
+    savings.account.type = 'savings';
+    const result = consolidate([savings]);
+    queries.saveConsolidation(result, [savings]);
+    db.exec('DELETE FROM account_upload_files; UPDATE consolidation_runs SET result_json = NULL');
+    applySchema(db);
+    const before = queries.getConsolidated(result.runId);
+    const coverage = queries.getAccountUploadRanges('2026-09-01')[0];
+    assert.equal(coverage.hasLegacyUploads, true);
+    assert.equal(coverage.fileCount, 0);
+    assert.deepEqual(coverage.ranges, [{ from: '2026-08-01', to: '2026-08-31' }]);
+    assert.equal(coverage.uploads[0].file, null);
+    assert.equal(coverage.uploads[0].basis, 'legacy');
+    assert.equal(coverage.uploads[0].from, '2026-08-01');
+    assert.equal(coverage.uploads[0].to, '2026-08-31');
+    assert.deepEqual(db.prepare('SELECT min_date, max_date FROM account_upload_files').get(),
+      { min_date: '2026-08-27', max_date: '2026-08-27' });
+    assert.deepEqual(queries.getConsolidated(result.runId), before);
+  } finally { db.close(); }
+});
+
+test('undated savings uploads remain undated while empty dated statements cover full months', () => {
+  const { db, queries } = setup();
+  try {
+    const empty = statement('empty', '2026-08-05', '2026-08-27', 'empty-savings');
+    empty.account.type = 'savings';
+    empty.transactions = [];
+    const undated = statement('undated', '2026-08-05', '2026-08-27', 'undated-savings');
+    undated.account.type = 'savings';
+    undated.transactions = [];
+    delete undated.account.periodFrom;
+    delete undated.account.periodTo;
+    queries.saveConsolidation(consolidate([empty, undated]), [empty, undated]);
+    const coverage = queries.getAccountUploadRanges('2026-09-01');
+    assert.equal(coverage[0].maxDate, '2026-08-31');
+    assert.equal(coverage[0].uploads[0].basis, 'statement');
+    assert.equal(coverage[1].minDate, null);
+    assert.equal(coverage[1].maxDate, null);
+    assert.deepEqual(coverage[1].ranges, []);
+    assert.deepEqual(coverage[1].gaps, []);
+    assert.equal(coverage[1].uploads[0].from, null);
+    assert.equal(coverage[1].uploads[0].to, null);
+    assert.equal(coverage[1].uploads[0].basis, 'unknown');
+  } finally { db.close(); }
+});

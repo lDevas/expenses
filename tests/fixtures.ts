@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import * as XLSX from 'xlsx';
 import { applySchema } from '../server/db/schemaSql.ts';
 import { DatabaseQueries } from '../server/db/queries.ts';
 import { parseStatementDate, type ParsedStatement, type RawTxn } from '../server/ingestion/types.ts';
@@ -25,6 +26,14 @@ export function setup() {
   sql.pragma('foreign_keys = ON');
   applySchema(sql);
   return { sql, q: new DatabaseQueries(sql) };
+}
+
+/** Build a Prex "Estado de cuenta" workbook buffer (the real export names prexcard.com as author). */
+export function prexWorkbook(rows: any[]) {
+  const wb = XLSX.utils.book_new();
+  wb.Props = { Author: 'prexcard.com', LastAuthor: 'prexcard.com', Company: 'prexcard.com', Title: 'Exportado de estado de cuenta' };
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Estado de cuenta');
+  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 }
 
 export function pairedStatements(): ParsedStatement[] {

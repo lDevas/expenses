@@ -86,5 +86,10 @@ export function readConsolidated(json: string): ConsolidatedResult {
   for (const e of r.exchanges) if (e.date) e.date = new Date(e.date);
   for (const p of r.positions) p.snapshotDate = new Date(p.snapshotDate);
   for (const t of r.realized) t.date = new Date(t.date);
+  if (!Array.isArray(r.balances)) r.balances = [];
+  for (const b of r.balances) {
+    b.date = new Date(b.date);
+    if (b.statementTo) b.statementTo = new Date(b.statementTo);
+  }
   return r;
 }

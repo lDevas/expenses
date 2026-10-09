@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import type { Transaction } from '../types/models';
 import { apiFetch } from '../lib/api';
+import AccountFilter from './AccountFilter';
 
 interface Props {
   accountId?: string;
@@ -15,13 +16,15 @@ export default function TransactionTable({ accountId, initialFrom, initialTo }: 
   const [from, setFrom] = useState(initialFrom || '');
   const [to, setTo] = useState(initialTo || '');
   const [filterSource, setFilterSource] = useState<string>('');
+  const [filterAccount, setFilterAccount] = useState('');
+  const selectedAccount = accountId || filterAccount;
 
   const loadTransactions = async () => {
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams();
-      if (accountId) params.set('account', accountId);
+      if (selectedAccount) params.set('account', selectedAccount);
       if (from) params.set('from', from);
       if (to) params.set('to', to);
       if (filterSource) params.set('source', filterSource);
@@ -37,7 +40,7 @@ export default function TransactionTable({ accountId, initialFrom, initialTo }: 
 
   useEffect(() => {
     loadTransactions();
-  }, [accountId, from, to, filterSource]);
+  }, [selectedAccount, from, to, filterSource]);
 
   const formatCurrency = (amount: number, currency: string) => {
     return new Intl.NumberFormat('en-US', {
@@ -50,6 +53,7 @@ export default function TransactionTable({ accountId, initialFrom, initialTo }: 
   return (
     <div className="transaction-table-container">
       <div className="filters">
+        <AccountFilter value={selectedAccount} onChange={setFilterAccount} disabled={!!accountId} />
         <input 
           type="date" 
           value={from} 
@@ -93,7 +97,7 @@ export default function TransactionTable({ accountId, initialFrom, initialTo }: 
               <tr key={txn.id}>
                 <td>{new Date(txn.date).toLocaleDateString()}</td>
                 <td title={txn.description}>{truncate(txn.description, 50)}</td>
-                <td>{txn.category}</td>
+                <td>{txn.categoryName || (txn.categorySource === 'excluded' ? '—' : 'Uncategorized')}</td>
                 <td className={txn.amount >= 0 ? 'positive' : 'negative'}>
                   {formatCurrency(txn.amount, txn.currency)}
                 </td>

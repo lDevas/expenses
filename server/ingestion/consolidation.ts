@@ -1,6 +1,5 @@
 import type {
   ConsolidatedCategory,
-  ConsolidatedExchange,
   ConsolidatedItem,
   ConsolidatedPosition,
   ConsolidatedRealized,
@@ -9,10 +8,14 @@ import type {
   ParsedStatement,
 } from './types.ts';
 import { generateId, toISODate, withinDays } from './types.ts';
-import { AccountRegistry, BROKER_WIRE_KEYWORDS, isOwnAccountNumber, type RegistryAccount } from './registry.ts';
-import { deduplicateStatements } from './identity.ts';
+import { AccountRegistry, type RegistryAccount } from './registry.ts';
+import { deduplicateStatements, itemFingerprint } from './identity.ts';
 import type { CtxTxn } from './consolidation/pairing.ts';
 import { ctxOf, findPair, consumePair } from './consolidation/pairing.ts';
+import { stepBalances } from './consolidation/balances.ts';
+import { stepOwnMovements } from './consolidation/movements.ts';
+import { normalizeMovements } from './consolidation/normalize.ts';
+import { brokerWireRates, matchBrokerWires } from './consolidation/brokerWires.ts';
 
 /**
  * The consolidation engine. Pure function over all parsed statements, driven by the
@@ -24,8 +27,9 @@ import { ctxOf, findPair, consumePair } from './consolidation/pairing.ts';
  *  3. true cash income (dividends, interest)      -> items (investment-income / tax)
  */
 export function consolidate(statements: ParsedStatement[]): ConsolidatedResult {
-  const files = statements.map(s => s.file);
-  statements = deduplicateStatements(statements);
+  // One file can back multiple statements (multi-currency ledgers); report it once.
+  const files = [...new Set(statements.map(s => s.file))];
+  statements = deduplicateStatements(normalizeMovements(statements));
   const registry = AccountRegistry.from(statements);
   const issues: Issue[] = [];
   for (const s of statements) issues.push(...s.issues);
@@ -46,20 +50,34 @@ export function consolidate(statements: ParsedStatement[]): ConsolidatedResult {
     exchanges: [],
     positions: [],
     realized: [],
+    balances: [],
     issues,
   };
 
-  stepFx(result, all);
   stepCardPayments(result, all);
-  stepInternalTransfers(result, all);
+  stepOwnMovements(result, all, registry);
   stepBroker(result, all);
   stepReimbursements(result, all);
   stepItems(result, all);
   stepPositions(result, statements, registry);
   stepRealized(result, statements, registry);
+  stepBalances(result, statements, registry);
 
   result.items.sort((a, b) => a.date.getTime() - b.date.getTime() || a.accountLabel.localeCompare(b.accountLabel));
+  result.balances.sort((a, b) => a.date.getTime() - b.date.getTime() || a.accountId.localeCompare(b.accountId));
   return result;
+}
+
+/** Proven principal rows for report projections, including old immutable runs. */
+export function ownMovementKeys(statements: ParsedStatement[]): Set<string> {
+  const sources = deduplicateStatements(normalizeMovements(statements));
+  const registry = AccountRegistry.from(sources);
+  const rows = sources.flatMap(s => s.transactions.map(t => ctxOf(s, registry.get(s.account.id)!, t)));
+  const movements: Pick<ConsolidatedResult, 'transfers' | 'exchanges'> = { transfers: [], exchanges: [] };
+  const owned = stepOwnMovements(movements, rows, registry);
+  const brokers = rows.filter(row => row.account.type === 'investment' && ['deposit', 'withdrawal'].includes(row.txn.kind));
+  const wires = matchBrokerWires(brokers, rows.filter(row => row.account.type !== 'investment'), brokerWireRates(movements.exchanges));
+  return new Set([...owned, ...brokers, ...wires.values()].map(row => itemFingerprint(row.txn)));
 }
 
 function registryAccountOf(s: ParsedStatement): RegistryAccount {
@@ -79,28 +97,12 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-function sign(n: number): number {
-  return n > 0 ? 1 : n < 0 ? -1 : 0;
-}
-
 function dedup(list: string[]): string[] {
   return [...new Set(list)];
 }
 
 function sourceFiles(...rows: (CtxTxn | null | undefined)[]): string[] {
   return dedup(rows.flatMap(t => t ? t.txn.sourceFiles ?? [t.file] : []));
-}
-
-function sameAccountNumber(a: string, b: string): boolean {
-  const na = a.replace(/[^\d]/g, '');
-  const nb = b.replace(/[^\d]/g, '');
-  return na.length > 3 && na === nb;
-}
-
-function absDaysBetween(a: Date, b: Date): number {
-  const da = Date.UTC(a.getFullYear(), a.getMonth(), a.getDate());
-  const db = Date.UTC(b.getFullYear(), b.getMonth(), b.getDate());
-  return Math.abs(Math.round((db - da) / 86400000));
 }
 
 /**
@@ -129,85 +131,6 @@ function pushItem(result: ConsolidatedResult, a: CtxTxn, partner: CtxTxn | null 
     sourceFiles: sourceFiles(a, partner),
   };
   result.items.push(item);
-}
-
-// ─── Step 1: FX exchanges (own-account currency swaps) ───
-
-function stepFx(result: ConsolidatedResult, all: CtxTxn[]): void {
-  for (const a of all) {
-    if (a.txn.kind !== 'fx' || a.consumed) continue;
-    const b = findFxPartner(a, all);
-    if (b) {
-      consumePair(a, b);
-      result.exchanges.push(makeExchangePair(a, b));
-    } else {
-      a.consumed = true;
-      result.exchanges.push(makeExchangeSingle(a));
-    }
-  }
-}
-
-function findFxPartner(a: CtxTxn, all: CtxTxn[]): CtxTxn | null {
-  let best: CtxTxn | null = null;
-  let bestDelta = Infinity;
-  for (const b of all) {
-    if (b === a || b.consumed || b.txn.kind !== 'fx') continue;
-    if (b.account.id === a.account.id) continue;
-    if (b.account.institutionId !== a.account.institutionId) continue;
-    if (b.txn.currency === a.txn.currency) continue;
-    if (a.txn.amount === 0 || sign(b.txn.amount) !== -sign(a.txn.amount)) continue;
-    if (!withinDays(a.txn.date, b.txn.date, 1)) continue;
-    if (a.txn.reference && b.txn.reference && a.txn.reference !== b.txn.reference) continue;
-    if (!(a.txn.reference && b.txn.reference)) {
-      const linksAB = a.txn.counterparty !== undefined && a.account.number !== undefined && b.account.number !== undefined && sameAccountNumber(a.txn.counterparty, b.account.number);
-      const linksBA = b.txn.counterparty !== undefined && a.account.number !== undefined && b.account.number !== undefined && sameAccountNumber(b.txn.counterparty, a.account.number);
-      if (!linksAB && !linksBA) continue;
-    }
-    const delta = absDaysBetween(a.txn.date, b.txn.date);
-    if (delta < bestDelta) {
-      best = b;
-      bestDelta = delta;
-    }
-  }
-  return best;
-}
-
-/** from = the debited (sold) side, to = the credited (bought) side. Rate = to per 1 from. */
-function makeExchangePair(a: CtxTxn, b: CtxTxn): ConsolidatedExchange {
-  const from = a.txn.amount < 0 ? a : b;
-  const to = from === a ? b : a;
-  const fromAmt = Math.abs(from.txn.amount);
-  const toAmt = Math.abs(to.txn.amount);
-  const impliedRate = fromAmt > 0 && from.txn.currency !== to.txn.currency ? toAmt / fromAmt : undefined;
-  return {
-    id: generateId(),
-    matchStatus: 'matched',
-    accountId: from.account.id,
-    accountLabel: `${from.account.label} ↔ ${to.account.label}`,
-    date: from.txn.date,
-    description: `Currency exchange: ${from.txn.description} ↔ ${to.txn.description}`,
-    fromCurrency: from.txn.currency,
-    fromAmount: round2(fromAmt),
-    toCurrency: to.txn.currency,
-    toAmount: round2(toAmt),
-    impliedRate,
-    sourceFiles: sourceFiles(a, b),
-  };
-}
-
-function makeExchangeSingle(a: CtxTxn): ConsolidatedExchange {
-  return {
-    id: generateId(),
-    matchStatus: 'unmatched',
-    accountId: a.account.id,
-    accountLabel: a.account.label,
-    date: a.txn.date,
-    description: a.txn.description,
-    fromCurrency: a.txn.currency,
-    fromAmount: round2(Math.abs(a.txn.amount)),
-    impliedRate: undefined,
-    sourceFiles: sourceFiles(a),
-  };
 }
 
 // ─── Step 2: Card payments (paying account ↔ card account) ───
@@ -241,37 +164,6 @@ function stepCardPayments(result: ConsolidatedResult, all: CtxTxn[]): void {
   }
 }
 
-// ─── Step 3: Internal transfers (own-account rows, never expenses) ───
-
-function stepInternalTransfers(result: ConsolidatedResult, all: CtxTxn[]): void {
-  for (const a of all) {
-    if (a.consumed) continue;
-    if (a.txn.kind !== 'transfer-in' && a.txn.kind !== 'transfer-out') continue;
-    if (!isOwnAccountNumber(a.txn.counterparty)) continue;
-
-    let partner: CtxTxn | null = null;
-    for (const b of all) {
-      if (b === a || b.consumed) continue;
-      if (b.account.id === a.account.id) continue;
-      if (b.account.institutionId !== a.account.institutionId) continue;
-      if (b.txn.kind !== 'transfer-in' && b.txn.kind !== 'transfer-out') continue;
-      if (a.txn.amount === 0 || sign(b.txn.amount) !== -sign(a.txn.amount)) continue;
-      if (Math.abs(Math.abs(a.txn.amount) - Math.abs(b.txn.amount)) > 0.01) continue;
-      if (!withinDays(a.txn.date, b.txn.date, 1)) continue;
-      if (!a.txn.counterparty || !b.account.number || !sameAccountNumber(a.txn.counterparty, b.account.number)) continue;
-      partner = b;
-      break;
-    }
-
-    if (partner) consumePair(a, partner);
-    else a.consumed = true;
-
-    // one item from the debit side when both sides exist, otherwise from the row itself
-    const source = a.txn.amount < 0 ? a : partner && partner.txn.amount < 0 ? partner : a;
-    pushItem(result, source, partner ?? undefined, 'internal-transfer');
-  }
-}
-
 // ─── Step 4: Broker accounts (wires, dividends, interest, trades) ───
 
 function stepBroker(result: ConsolidatedResult, all: CtxTxn[]): void {
@@ -279,15 +171,14 @@ function stepBroker(result: ConsolidatedResult, all: CtxTxn[]): void {
   const bankTxns = all.filter((t) => t.account.type !== 'investment');
 
   // implied UYU/USD rates from the matched FX pairs (period rate pool)
-  const rates: { date: Date; rate: number }[] = result.exchanges
-    .filter((e) => ['USD/UYU', 'UYU/USD'].includes(`${e.fromCurrency}/${e.toCurrency}`) && e.matchStatus === 'matched' && e.impliedRate !== undefined && e.fromAmount !== undefined && e.toAmount !== undefined && e.fromAmount > 0)
-    .map((e) => ({ date: e.date ?? new Date(), rate: e.fromCurrency === 'USD' ? e.impliedRate! : 1 / e.impliedRate! }));
+  const rates = brokerWireRates(result.exchanges);
 
+  const wirePairs = matchBrokerWires(brokerTxns, bankTxns, rates);
   // 1. cash-boundary events → transfers list (always hidden from items)
   for (const a of brokerTxns) {
     if (a.consumed) continue;
     if (a.txn.kind !== 'deposit' && a.txn.kind !== 'withdrawal') continue;
-    const b = findWirePartner(a, bankTxns, rates);
+    const b = wirePairs.get(a) ?? null;
     consumePair(a, b);
     const brokerIsFrom = a.txn.amount < 0; // withdrawal: money leaves the broker
     result.transfers.push({
@@ -395,56 +286,6 @@ function stepBroker(result: ConsolidatedResult, all: CtxTxn[]): void {
     consumePair(a, null);
     pushItem(result, a, null, 'fee', { ...(a.txn.metadata ?? {}) });
   }
-}
-
-/**
- * Cross-boundary wire pairing: broker deposit/withdrawal ↔ bank debit/credit.
- * Counterparty keywords on the bank side, opposite sign, ±2 days, and amount
- * (exact if same currency, else ±3% against the period implied UYU/USD rate).
- */
-function findWirePartner(a: CtxTxn, bankTxns: CtxTxn[], rates: { date: Date; rate: number }[]): CtxTxn | null {
-  let best: CtxTxn | null = null;
-  let bestScore = Infinity;
-  for (const b of bankTxns) {
-    if (b.consumed) continue;
-    const desc = `${b.txn.description} ${b.txn.counterparty ?? ''}`.toUpperCase();
-    if (!BROKER_WIRE_KEYWORDS.some((k) => desc.includes(k))) continue;
-    if (a.txn.amount === 0 || sign(b.txn.amount) !== -sign(a.txn.amount)) continue;
-    if (!withinDays(a.txn.date, b.txn.date, 2)) continue;
-    const magA = Math.abs(a.txn.amount);
-    const magB = Math.abs(b.txn.amount);
-    if (a.txn.currency === b.txn.currency) {
-      if (Math.abs(magA - magB) > 1) continue; // same currency: near-exact
-    } else {
-      const rate = closestRate(rates, a.txn.date);
-      if (!rate) continue;
-      if (![a.txn.currency, b.txn.currency].every(c => c === 'USD' || c === 'UYU')) continue;
-      const expected = a.txn.currency === 'USD' ? magA * rate : magA / rate;
-      if (Math.abs(magB - expected) > 0.03 * expected) continue; // ±3%
-    }
-    const score = absDaysBetween(a.txn.date, b.txn.date);
-    if (score < bestScore) {
-      best = b;
-      bestScore = score;
-    }
-  }
-  return best;
-}
-
-/** Closest pooled FX rate by date (falls back to the mean of the pool). */
-function closestRate(rates: { date: Date; rate: number }[], on: Date): number | null {
-  if (rates.length === 0) return null;
-  let best = rates[0];
-  let bestDelta = Infinity;
-  for (const r of rates) {
-    const d = absDaysBetween(r.date, on);
-    if (d < bestDelta) {
-      best = r;
-      bestDelta = d;
-    }
-  }
-  if (bestDelta > 90) return rates.reduce((s, r) => s + r.rate, 0) / rates.length;
-  return best.rate;
 }
 
 // ─── Step 5: Reimbursement condense (REDIVA / REDUC. IVA ↔ purchase) ───

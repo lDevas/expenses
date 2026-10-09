@@ -1,0 +1,21 @@
+.statement-reports { border-top: 1px solid var(--border); margin-top: 32px; padding-top: 24px; scroll-margin-top: 24px; }
+.report-section-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+.report-section-heading h2 { margin-bottom: 0; }
+.report-section-heading > span, .report-section-heading > a { font-size: 13px; }
+.report-section-note { font-size: 13px; margin-bottom: 12px; }
+.statement-reports a { color: var(--accent); text-underline-offset: 3px; }
+.statement-reports .issue-list { overflow-wrap: anywhere; }
+.statement-reports .issue-row { flex-wrap: wrap; align-items: baseline; }
+.statement-reports .issue-row.error .badge { color: #c62828; border-color: currentColor; }
+.statement-reports .issue-row.warning .badge { color: #b45309; border-color: currentColor; }
+.movement-reconciliation .table-wrap { border: 1px solid var(--border); border-radius: 8px; }
+.movement-reconciliation .table-wrap + .table-wrap { margin-top: 16px; }
+.movement-reconciliation caption { padding: 10px 12px; text-align: left; font-weight: 500; color: var(--text-h); background: var(--bg-sidebar); }
+.movement-reconciliation td { vertical-align: top; }
+.movement-reconciliation .reconciliation-missing-side { color: #c62828; }
+.reconciliation-missing-side strong { display: inline-block; font-size: 12px; font-weight: 600; white-space: normal; }
+@media (prefers-color-scheme: dark) {
+  .movement-reconciliation .reconciliation-missing-side, .statement-reports .issue-row.error, .statement-reports .issue-row.error .badge { color: #ff8585; }
+  .statement-reports .issue-row.warning .badge { color: #e9b964; }
+  .movement-reconciliation .badge.ok { color: #75d194; border-color: #438e5c; }
+}

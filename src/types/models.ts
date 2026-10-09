@@ -1,3 +1,5 @@
+import type { CategoryAssignment } from './categories.ts';
+
 // ─── Core Financial Entities ───
 
 export interface Institution {
@@ -26,7 +28,7 @@ export interface Account {
 
 export type AccountType = 'checking' | 'savings' | 'investment' | 'credit' | 'loan';
 
-export interface Transaction {
+export interface Transaction extends Partial<CategoryAssignment> {
   id: string;
   accountId: string;
   date: Date;                    // Transaction date
@@ -34,7 +36,7 @@ export interface Transaction {
   description: string;
   amount: number;                // Positive = credit/income, negative = debit/expense
   currency: string;
-  category?: string;             // AI-assigned or manual
+  category?: string;             // Accounting classification; user labels are categoryId/categoryName
   subcategory?: string;
   reference?: string;            // Reference number from bank
   metadata?: Record<string, any>; // Raw data from bank for audit trail
@@ -175,6 +177,18 @@ export interface ConsolidatedRealized {
   sourceFiles: string[];
 }
 
+export interface ConsolidatedBalance {
+  id: string;
+  accountId: string;
+  accountLabel: string;
+  date: string;
+  amount: number;
+  currency: string;
+  source: 'opening' | 'activity' | 'closing';
+  sourceFiles: string[];
+  statementTo?: string;
+}
+
 export interface ConsolidatedIssue {
   file: string;
   sheet?: string;
@@ -194,7 +208,59 @@ export interface ConsolidatedResult {
   exchanges: ConsolidatedExchange[];
   positions: ConsolidatedPosition[];
   realized: ConsolidatedRealized[];
+  balances: ConsolidatedBalance[];
   issues: ConsolidatedIssue[];
+}
+
+export interface InvestmentReport {
+  accounts: Account[];
+  result: ConsolidatedResult | null;
+  cash: {
+    bank: InvestmentCashBalance[];
+    broker: InvestmentCashBalance[];
+  };
+}
+
+export interface InvestmentCashBalance {
+  accountId: string;
+  accountLabel: string;
+  currency: string;
+  balance: number | null;
+  available: number | null;
+  balanceDate: string | null;
+  source: 'statement' | 'activity' | null;
+}
+
+// ─── Net worth (GET /api/net-worth) ───
+
+export interface NetWorthSnapshot {
+  date: string;
+  amount: number | null;   // null: an observation exists on this date but its value is unknown
+}
+
+export interface NetWorthSeries {
+  accountId: string;
+  accountLabel: string;
+  accountType: AccountType;
+  currency: string;
+  /** Ascending. Includes one continuity point before `from` so step charts enter the window correctly. */
+  snapshots: NetWorthSnapshot[];
+}
+
+export interface NetWorthAccount {
+  accountId: string;
+  accountLabel: string;
+  accountType: AccountType;
+  currency: string;
+}
+
+export interface NetWorthReport {
+  from: string | null;
+  to: string | null;
+  banks: NetWorthSeries[];
+  investments: NetWorthSeries[];
+  /** Balance-bearing account types with no reported balance anywhere. */
+  unreported: NetWorthAccount[];
 }
 
 // Summary returned by POST /api/statements/upload.
@@ -236,6 +302,7 @@ export interface AccountUploadFile {
 
 export interface AccountUploadCoverage {
   accountId: string;
+  accountType: AccountType;
   institutionId: string;
   institutionName: string;
   accountName: string;
