@@ -88,6 +88,23 @@ try {
   await page.select(period, '2026-09');
   await page.waitForFunction(() => document.querySelector('.net-worth-card .balance-value')?.textContent?.includes('12,345'));
   assert.match(await page.$eval(`${card} .balance-label`, el => el.textContent!), /as of 2026-09-30/);
+
+  // A step path is only drawn between adjacent known values, so an isolated
+  // observation must be visible as a dot. Without an FX rate the combined
+  // chart keeps per-currency lines (not relaid out): the single investment
+  // observation is isolated, the continuous bank line is not.
+  await page.waitForFunction(
+    () => document.querySelectorAll('.chart-panel.tone-networth:nth-child(2) circle.recharts-line-dot').length === 1,
+    { timeout: 10000 },
+  );
+  assert.equal(
+    await page.$$eval('.chart-panel.tone-networth:nth-child(1) circle.recharts-line-dot', els => els.length),
+    0, 'the continuous bank line draws no dots',
+  );
+  assert.ok(
+    await page.$$eval('.chart-panel.tone-networth:nth-child(2) path.recharts-curve', els => els.length) >= 2,
+    'the combined chart draws a curve path per line',
+  );
   await page.screenshot({ path: '.context/net-worth-dashboard.png' });
 
   await page.setViewport({ width: 390, height: 844 });

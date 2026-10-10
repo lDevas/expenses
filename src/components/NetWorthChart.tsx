@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, Legend,
 } from 'recharts';
+import type { DotItemDotProps } from 'recharts';
 import { formatMoney } from '../lib/finance';
 import type { NetWorthLine } from '../lib/netWorth';
 
@@ -36,6 +37,40 @@ export default function NetWorthChart({ title, lines, emptyMessage = 'No data in
     }
     return [...byDate.values()].sort((a, b) => String(a.date).localeCompare(String(b.date)));
   }, [lines]);
+
+  // A step path is only drawn between adjacent known values; a known value
+  // whose neighbors are gaps (or the row edge) renders as a zero-length path,
+  // i.e. invisible. A sparse series — e.g. a broker with a single archived
+  // observation — would then show its legend entry but draw nothing. Mark
+  // those isolated dates so they can be drawn as dots.
+  const isolated = useMemo(() => {
+    const sets = new Map<string, Set<string>>();
+    for (const line of lines) {
+      const dates = new Set<string>();
+      for (let i = 0; i < rows.length; i++) {
+        const value = rows[i][line.name];
+        if (value === null || value === undefined) continue;
+        const prev = i > 0 ? rows[i - 1][line.name] : undefined;
+        const next = i < rows.length - 1 ? rows[i + 1][line.name] : undefined;
+        if ((prev === null || prev === undefined) && (next === null || next === undefined)) {
+          dates.add(String(rows[i].date));
+        }
+      }
+      sets.set(line.name, dates);
+    }
+    return sets;
+  }, [rows, lines]);
+
+  const renderDot = (line: NetWorthLine) => {
+    const dates = isolated.get(line.name) ?? new Set<string>();
+    return (props: DotItemDotProps) => {
+      if (props.cx === undefined || props.cy === undefined) return null;
+      const row = props.payload as Row | undefined;
+      return dates.has(String(row?.date))
+        ? <circle className="recharts-line-dot" cx={props.cx} cy={props.cy} r={3} fill={line.color} />
+        : null;
+    };
+  };
 
   const compact = (v: number) =>
     new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(v);
@@ -113,7 +148,7 @@ export default function NetWorthChart({ title, lines, emptyMessage = 'No data in
                   dataKey={line.name}
                   stroke={line.color}
                   strokeWidth={2}
-                  dot={false}
+                  dot={renderDot(line)}
                   activeDot={{ r: 3 }}
                   connectNulls={false}
                 />

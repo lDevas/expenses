@@ -6,7 +6,7 @@ import { toISODate } from '../server/ingestion/types.ts';
 import type { ParsedStatement } from '../server/ingestion/types.ts';
 import { DatabaseQueries } from '../server/db/queries.ts';
 import { setup, date, statement, txn } from './fixtures.ts';
-import { buildCombinedLines, buildLines, linesNote, netWorthCardData, scopedSeries, valueAt } from '../src/lib/netWorth.ts';
+import { buildCombinedLines, buildLines, linesNote, netWorthCardData, relayoutLine, scopedSeries, valueAt, type NetWorthLine } from '../src/lib/netWorth.ts';
 import { type FxInfo } from '../src/lib/finance.ts';
 import type { Account, AccountType, NetWorthReport, NetWorthSeries } from '../src/types/models.ts';
 
@@ -261,6 +261,36 @@ test('endpoint: a statement with an unpriced position yields a null observation,
   );
 });
 
+test('endpoint: a holdings sheet listing positions at several snapshot dates values only the latest snapshot', async () => {
+  const { q } = setup();
+  const s = bankStatement('etoro', 'checking', 'etoro-statement', { file: 'etoro.xlsx' });
+  s.account.type = 'investment';
+  s.account.currency = 'USD';
+  s.account.periodFrom = date('2026-01-01');
+  s.account.periodTo = date('2026-06-30');
+  s.account.closingBalance = 100;
+  s.account.balanceDate = date('2026-06-30');
+  s.positions = [
+    // Opening valuation (statement start): the same positions re-listed at the end.
+    { accountId: 'etoro', symbol: 'URA', qty: 100, costBasis: 4000, value: 4500, snapshotDate: date('2026-01-01'), currency: 'USD' },
+    { accountId: 'etoro', symbol: 'VOO', qty: 10, costBasis: 2000, value: 2200, snapshotDate: date('2026-01-01'), currency: 'USD' },
+    // Closed mid-statement: only in the opening snapshot, must not count.
+    { accountId: 'etoro', symbol: 'AAPL', qty: 5, costBasis: 600, value: 700, snapshotDate: date('2026-01-01'), currency: 'USD' },
+    // Closing valuation (period end): the consistent snapshot.
+    { accountId: 'etoro', symbol: 'URA', qty: 100, costBasis: 4000, value: 5100, snapshotDate: date('2026-06-30'), currency: 'USD' },
+    { accountId: 'etoro', symbol: 'VOO', qty: 10, costBasis: 2000, value: 2600, snapshotDate: date('2026-06-30'), currency: 'USD' },
+  ];
+  q.saveConsolidation(consolidate([s]), [s]);
+  const report = (await (await createApp(q).request('/api/net-worth?from=2026-01-01&to=2026-06-30')).json()) as NetWorthReport;
+  const series = report.investments.find(i => i.accountId === 'etoro')!;
+  assert.deepEqual(
+    series.snapshots.map(p => [toISODate(new Date(p.date)), p.amount]),
+    [
+      ['2026-06-30', 5100 + 2600 + 100], // latest snapshot + cash; no double-count of Jan, no closed AAPL
+    ],
+  );
+});
+
 // ─── version rebuild (legacy databases) ───
 
 test('startup rebuild recomputes balance snapshots for databases saved before the feature', () => {
@@ -329,6 +359,26 @@ test('valueAt carries the last observation forward and stops at null gap markers
   assert.equal(valueAt(s, '2026-08-31'), 95);
 });
 
+test('relayoutLine carries the last point to every day, gaps keep their count, pre-first days stay unknown', () => {
+  const line: NetWorthLine = { name: 'Bank (USD)', color: '#8b5cf6', points: [
+    { date: '2026-08-01', value: 100, currency: 'USD', known: 2, total: 2 },
+    { date: '2026-08-10', value: null, currency: 'USD', known: 1, total: 2 },
+    { date: '2026-08-20', value: 110, currency: 'USD', known: 2, total: 2 },
+  ]};
+  assert.deepEqual(
+    relayoutLine(line, ['2026-07-15', '2026-08-01', '2026-08-05', '2026-08-15', '2026-08-20', '2026-08-25'])
+      .points.map(p => [p.date, p.value, p.known, p.total]),
+    [
+      ['2026-07-15', null, 0, 2], // before the first observation: unknown, accounts still count
+      ['2026-08-01', 100, 2, 2],
+      ['2026-08-05', 100, 2, 2], // carried
+      ['2026-08-15', null, 1, 2], // the gap marker is carried with its report count
+      ['2026-08-20', 110, 2, 2],
+      ['2026-08-25', 110, 2, 2], // carried past the last observation
+    ],
+  );
+});
+
 test('scopedSeries: the account filter only narrows series of the same kind as the selected account', () => {
   assert.equal(scopedSeries(testReport, 'bank', null, '').length, 2);
   assert.equal(scopedSeries(testReport, 'bank', acct('card', 'credit'), '').length, 2); // different kind: unfiltered
@@ -387,6 +437,43 @@ test('buildCombinedLines adds a Total line only when bank and investments share 
 
   // One kind missing entirely: no total line.
   assert.deepEqual(buildCombinedLines(bank, []).map(l => l.name), ['Bank (USD)']);
+});
+
+test('buildCombinedLines lays both lines out on the shared day set and sums the carried values', () => {
+  const report: NetWorthReport = {
+    from: null, to: null,
+    banks: [clientSeries('s1', 'Savings', 'savings', 'USD', [
+      ['2026-08-01', 100], ['2026-08-15', 200], ['2026-08-31', 300],
+    ])],
+    investments: [clientSeries('ibkr', 'IBKR', 'investment', 'USD', [['2026-08-20', 50]])],
+    unreported: [],
+  };
+  const combined = buildCombinedLines(
+    buildLines('Bank', 'bank', report, null, '', fx),
+    buildLines('Investments', 'investment', report, null, '', fx),
+  );
+  assert.deepEqual(combined.map(l => l.name), ['Bank', 'Investments', 'Total']); // single series: no currency suffix
+  // Both lines are dense: one point per shared day, last value carried forward.
+  assert.deepEqual(combined[0].points.map(p => [p.date, p.value, p.known, p.total]), [
+    ['2026-08-01', 100, 1, 1],
+    ['2026-08-15', 200, 1, 1],
+    ['2026-08-20', 200, 1, 1], // carried: the bank had no snapshot that day
+    ['2026-08-31', 300, 1, 1],
+  ]);
+  assert.deepEqual(combined[1].points.map(p => [p.date, p.value, p.known, p.total]), [
+    ['2026-08-01', null, 0, 1], // before the first observation: unknown, but the account still counts
+    ['2026-08-15', null, 0, 1],
+    ['2026-08-20', 50, 1, 1],
+    ['2026-08-31', 50, 1, 1], // carried forward
+  ]);
+  // The total matches what is drawn: sum of the carried values where both are
+  // known; a still-silent kind contributes its known accounts (zero pre-first).
+  assert.deepEqual(combined[2].points.map(p => [p.date, p.value, p.known, p.total]), [
+    ['2026-08-01', null, 1, 2], // bank reported, investment predates its first observation
+    ['2026-08-15', null, 1, 2],
+    ['2026-08-20', 250, 2, 2],
+    ['2026-08-31', 350, 2, 2],
+  ]);
 });
 
 test('linesNote explains currency handling', () => {
