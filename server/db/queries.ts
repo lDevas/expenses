@@ -242,8 +242,10 @@ export class DatabaseQueries {
    * consolidated balance step: opening / running / closing per statement.
    * Same-day snapshots from overlapping statements collapse to the newer
    * statement's value. Investment accounts get one observation per archived
-   * statement: position value plus broker cash, where an unknown piece makes
-   * the observation unknown unless the other piece is absent.
+   * statement: the newest position snapshot (a holdings sheet may list the
+   * same position at several dates; summing them would double-count) plus
+   * broker cash, where an unknown piece makes the observation unknown unless
+   * the other piece is absent.
    *
    * Snapshots are filtered to [from, to] plus one continuity point before
    * `from` so step charts enter the window with the value that carried over.
@@ -311,18 +313,23 @@ export class DatabaseQueries {
           if (s.account.id !== id) continue;
           const positions = s.positions.filter(p => Number.isFinite(p.snapshotDate.getTime()));
           const cash = brokerCashSnapshot(s);
-          let date: Date | undefined;
-          for (const p of positions) if (!date || p.snapshotDate > date) date = p.snapshotDate;
+          // A holdings sheet may list the same position at several snapshot dates
+          // (e.g. statement start and end). Only the newest snapshot is a
+          // consistent whole-portfolio valuation, and the older one would
+          // resurrect positions closed in the meantime.
+          let latest: Date | undefined;
+          for (const p of positions) if (!latest || p.snapshotDate > latest) latest = p.snapshotDate;
+          const held = positions.filter(p => p.snapshotDate.getTime() === latest?.getTime());
+          let date: Date | undefined = latest;
           if (cash && (!date || cash.date > date)) date = cash.date;
           if (!date) continue;
           // A missing piece stays missing, except an absent piece counts as zero.
-          const hasPositions = positions.length > 0;
-          const valueKnown = positions.every(p => typeof p.value === 'number' && Number.isFinite(p.value));
-          if (!cash && !hasPositions) continue; // nothing observed at all
-          const value = hasPositions ? positions.reduce<number>((sum, p) => sum + (p.value ?? 0), 0) : 0;
+          if (!cash && held.length === 0) continue; // nothing observed at all
+          const valueKnown = held.every(p => typeof p.value === 'number' && Number.isFinite(p.value));
+          const value = held.reduce<number>((sum, p) => sum + (p.value ?? 0), 0);
           const amount = valueKnown && cash
             ? value + cash.amount
-            : valueKnown && !cash
+            : valueKnown
               ? value // broker cash unreported: positions only, still partially known
               : null;
           observations.push({ date, amount, fresh: s.account.periodTo?.getTime() ?? 0, files: s.file });

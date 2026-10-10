@@ -143,8 +143,42 @@ export function linesNote(lines: NetWorthLine[], fx: FxInfo | null): string | nu
 }
 
 /**
+ * Lay a line out on the chart's day set: one point per day, carrying the last
+ * point forward (step semantics). Between the line's own dates this agrees
+ * with `valueAt`, because every snapshot date is a point date. Days before the
+ * first point have nothing to carry, so the value stays unknown while the
+ * line's accounts still count. `days` must be sorted ascending.
+ */
+export function relayoutLine(line: NetWorthLine, days: string[]): NetWorthLine {
+  const currency = line.points[0]?.currency ?? 'USD';
+  let last: NetWorthPoint | null = null;
+  let i = 0;
+  const points = days.map((day) => {
+    while (i < line.points.length && line.points[i].date <= day) {
+      last = line.points[i];
+      i++;
+    }
+    if (last === null) {
+      return { date: day, value: null, currency, known: 0, total: line.points[0]?.total ?? 0 };
+    }
+    // A carried value still rests on every reporting account; a carried gap
+    // keeps the gap marker's report count for the tooltip.
+    return {
+      date: day,
+      value: last.value,
+      currency,
+      known: last.value === null ? last.known : last.total,
+      total: last.total,
+    };
+  });
+  return { ...line, points };
+}
+
+/**
  * Adds the combined total line to a bank + investment chart: pointwise sum,
- * only when both kinds share one display currency.
+ * only when both kinds share one display currency. Each line is laid out on
+ * the shared day set so the chart draws continuous step lines, and the total
+ * sums the carried values, matching what is drawn.
  */
 export function buildCombinedLines(bank: NetWorthLine[], investments: NetWorthLine[]): NetWorthLine[] {
   const a = bank.filter(l => l.points.length > 0);
@@ -156,21 +190,20 @@ export function buildCombinedLines(bank: NetWorthLine[], investments: NetWorthLi
   }
   const [lineA, lineB] = [a[0], b[0]];
   const days = [...new Set([...lineA.points, ...lineB.points].map(p => p.date))].sort();
-  const byDate = (line: NetWorthLine, day: string) => line.points.find(p => p.date === day) ?? null;
-  const points = days.map((day) => {
-    const pa = byDate(lineA, day);
-    const pb = byDate(lineB, day);
-    const value = pa !== null && pb !== null && pa.value !== null && pb.value !== null ? pa.value + pb.value : null;
+  const denseA = relayoutLine(lineA, days);
+  const denseB = relayoutLine(lineB, days);
+  const totalPoints = days.map((day, i) => {
+    const pa = denseA.points[i];
+    const pb = denseB.points[i];
     return {
       date: day,
-      value,
+      value: pa.value !== null && pb.value !== null ? pa.value + pb.value : null,
       currency: lineA.points[0].currency,
-      known: (pa?.known ?? 0) + (pb?.known ?? 0),
-      // A line missing for a day still counts its accounts: they are silent, not excluded.
-      total: (pa?.total ?? lineA.points[0].total) + (pb?.total ?? lineB.points[0].total),
+      known: pa.known + pb.known,
+      total: pa.total + pb.total,
     };
   });
-  return [...bank, ...investments, { name: 'Total', color: LINE_COLORS.total, points }];
+  return [denseA, denseB, { name: 'Total', color: LINE_COLORS.total, points: totalPoints }];
 }
 
 // ─── Card ───
