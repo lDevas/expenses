@@ -1,22 +1,150 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# Conductor repository settings — shared with everyone who works on this repo.
+# Docs: https://conductor.build/docs/reference/settings
+#
+# This file lists EVERY setting Conductor supports in a repo settings file,
+# each with a plain-English comment. Two conventions:
+#
+#   key = value           ACTIVE. The value is Conductor's built-in default,
+#                         unless it says "← intentionally set".
+#   # key = value         Documented on purpose, but left unset so it never
+#                         overrides your personal settings in
+#                         ~/.conductor/settings.toml.
+#
+# Layers, highest wins: managed → personal (~/.conductor) → this file →
+# Conductor's built-in defaults. Conductor picks up changes here after they
+# are merged to the repo's default branch.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Tells your editor to check this file against Conductor's official rules
+# (autocomplete + typo warnings).
 "$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
 
+# ── Scripts: commands Conductor runs around workspaces ─────────────────────
+
 [scripts]
+# Runs once when Conductor creates a new workspace — "prep the kitchen"
+# (install dependencies) before anyone starts cooking. ← intentionally set
 setup = "npm install"
+
+# How Run-tab scripts behave: "nonconcurrent" (default) = one at a time;
+# "concurrent" = several may run at once.
 run_mode = "nonconcurrent"
 
-# Starts the API server and the web (vite) dev server together.
+# true = start the default run script automatically the moment a new
+# workspace finishes setup. Default: false.
+auto_run_after_setup = false
+
+# # archive = ""
+# Runs when a workspace is archived — a "clean up before closing" step.
+# Default: none.
+
+# Each [[scripts.run.*]] table below is one script in the Run tab.
+# Every run script supports these fields:
+#   command       (required) — the shell command to run
+#   args          = []       — extra words to pass after the command
+#   options.cwd   = ""       — folder inside the workspace to run from (default: root)
+#   default       = false    — the script the Run button picks when several exist
+#   icon          = ""       — icon shown next to the script (default: Conductor's)
+#   available_in  = "both"   — where offered: "local", "cloud", or both (default: both)
+#   hide          = false    — hide from the Run tab (newer Conductor versions only)
+
+# Runs the API and the web app together (package.json's `run` script).
+# ← intentionally set: this is the app's one-command start.
 [scripts.run.all]
 command = "npm run run"
-default = true
+default = true   # ← intentionally set — the default choice in the Run tab
 
-# Web dev server only.
+# Web dev server only (Vite). ${CONDUCTOR_PORT:-5173} = Conductor's
+# per-workspace port, or 5173 outside Conductor, so workspaces don't collide.
 [scripts.run.web]
 command = "npm run dev -- --port ${CONDUCTOR_PORT:-5173}"
 
-# API server only.
+# API server only (Hono + SQLite; auto-restarts on source changes).
 [scripts.run.api]
 command = "npm run server"
 
+# ── Preview URLs: what the terminal panel's "Open" button opens ────────────
+# The first entry opens by default; extra entries appear in its dropdown.
+# $CONDUCTOR_PORT is Conductor's per-workspace port; $((CONDUCTOR_PORT + 1))
+# through +9 are its allocated side ports. These are substitutions, NOT
+# shell commands.
+
 [[preview_urls]]
-name = "Expenses"
-url = "http://localhost:$CONDUCTOR_PORT"
+name = "Expenses"   # label shown in the Open dropdown
+url = "http://localhost:$CONDUCTOR_PORT"   # ← intentionally set
+
+# ── Environment variables for agents working in this repo ──────────────────
+# Put variables here and agents will see them. Empty = no extras (the app
+# reads CONDUCTOR_PORT / SERVER_PORT / API_URL / CORS_ORIGIN from the
+# process environment — see README).
+
+[environment_variables]
+# KEY = "value"        # for BOTH local and cloud agents
+# Example: SERVER_PORT = "3456"
+
+[environment_variables.local]
+# KEY = "value"        # local agents only (running on your Mac)
+# Example: FOO = "bar"
+
+[environment_variables.cloud]
+# KEY = "value"        # cloud agents only
+# Example: BAZ = "qux"
+
+# ── Prompts: reminder notes Conductor tacks onto agent messages ────────────
+# Blank ("") = same as not set. Commented = deliberately not set.
+
+[prompts]
+# Appended to EVERY agent session in this repo — the standing house rules.
+# ← intentionally set
+general = """
+This is a personal-finance app processing real bank, card, and broker statements.
+- `data/` holds real financial data (SQLite DB, cookies, screenshots). Never read, quote, or commit its contents.
+- Never run `npm run reset-db` unless explicitly asked — it deletes all imported data.
+- Before committing, run: `npm run lint`, `npx tsc -p tsconfig.server.json`, `npm test`.
+"""
+# code_review = ""             # custom prompt for the "code review" action
+# create_pr = ""               # custom prompt for "create PR"
+# fix_errors = ""              # custom prompt for "fix errors"
+# resolve_merge_conflicts = "" # custom prompt for "resolve merge conflicts"
+# rename_branch = ""           # custom prompt for branch renaming
+
+# ── Agent "harnesses": which program/provider each agent type uses ─────────
+# All commented out = "use my personal settings / Conductor's auto-detection"
+# (your ~/.conductor/settings.toml already picks the OpenCode executable).
+# claude_code_executable_path = "/path/to/claude"    # a specific Claude Code binary (e.g. an alias)
+# codex_executable_path       = "/path/to/codex"     # a specific Codex binary
+# opencode_executable_path    = "/path/to/opencode"  # a specific OpenCode binary
+# claude_provider             = "anthropic"  # what powers Claude: "anthropic", "bedrock", or "vertex"
+# codex_provider              = ""           # what powers Codex (e.g. ChatGPT sign-in)
+# bedrock_region              = "us-east-1"  # AWS region, only for Bedrock Claude
+# vertex_project_id           = ""           # Google project, only for Vertex Claude
+# ssh_key_path                = "~/.ssh/id_ed25519"  # key used for pushing in cloud workspaces
+
+# ── Git behavior ────────────────────────────────────────────────────────────
+
+[git]
+# Delete the workspace's branch when the workspace is archived (keeps the
+# remote tidy). Default: false.
+delete_branch_on_archive = false
+
+# Archive the workspace automatically the moment its PR merges (no manual
+# cleanup). Default: false.
+archive_on_merge = false
+
+# # worktree_push_auto_setup_remote = false
+# On first push, auto-point the branch at origin/<branch>. Conductor decides
+# the built-in default; left unset here on purpose.
+# # branch_prefix_type = ""   # how branch-name prefixes are generated
+# # branch_prefix = "feat/"   # a custom branch prefix. Your personal file
+#                             # sets "ticket/" for this project — leave unset
+#                             # here so your personal setting wins.
+
+# ── Models ──────────────────────────────────────────────────────────────────
+
+[models]
+# # visible_provider_models = "{}"
+# JSON list controlling which models appear in this repo's picker. Your
+# personal file already restricts it to the LM Studio model — leave unset
+# here so your personal setting wins.
+
